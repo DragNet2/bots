@@ -56,7 +56,7 @@ jobs:
           port: ${{ secrets.LV_SERVER_PORT || '22' }}
           envs: BOT_NAME
           script: |
-            cd ~/bots/$BOT_NAME
+            cd /home/bots/$BOT_NAME
             git pull origin main
             pip install -r requirements.txt
             if [ -f "start.sh" ]; then

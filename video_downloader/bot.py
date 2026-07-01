@@ -257,11 +257,15 @@ def get_aria2_bin() -> str:
     return os.path.dirname(os.path.abspath(__file__)) + "/venv/bin/aria2c"
 
 
+# Cookie file for rutracker (export from browser)
+COOKIES_FILE = os.path.dirname(os.path.abspath(__file__)) + "/rutracker_cookies.txt"
+
+
 def is_torrent_url(url: str) -> bool:
     """Check if URL is a torrent/magnet link."""
     url_lower = url.lower()
     return any([
-        "rutracker.org" in url_lower and "dl.php" in url_lower,
+        "rutracker.org" in url_lower and ("dl.php" in url_lower or "viewtopic.php" in url_lower),
         url_lower.endswith(".torrent"),
         url_lower.startswith("magnet:"),
     ])
@@ -305,40 +309,70 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 )
                 return
 
-            # Use yt-dlp to download the .torrent file
-            venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
-            yt_dlp_path = f"{venv_bin}/yt-dlp"
+            # Build the download URL
+            download_url = f"https://rutracker.org/forum/dl.php?t={topic_id}"
 
-            result = subprocess.run(
-                [yt_dlp_path, "--cookies-from-browser", "chrome", "-o", torrent_path, "--no-playlist", url],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
+            # Try with cookies file first
+            cookies_arg = []
+            if os.path.exists(COOKIES_FILE):
+                cookies_arg = ["--cookies", COOKIES_FILE]
+            else:
+                # Try chrome cookies via python
+                chrome_cookies = os.path.expanduser("~/.config/google-chrome/Default/Cookies")
+                if os.path.exists(chrome_cookies):
+                    try:
+                        import sqlite3
+                        conn = sqlite3.connect(chrome_cookies)
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT host, name, value, path FROM cookies WHERE host LIKE '%rutracker%'"
+                        )
+                        cookies_data = cursor.fetchall()
+                        conn.close()
 
-            if result.returncode != 0:
-                # Try without cookies (might work for public torrents)
-                result = subprocess.run(
-                    [yt_dlp_path, "-o", torrent_path, "--no-playlist", url],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
+                        if cookies_data:
+                            with open(COOKIES_FILE, "w") as f:
+                                f.write("# Netscape HTTP Cookie File\n")
+                                for host, name, value, path in cookies_data:
+                                    f.write(f"{host}\tTRUE\t{path}\tFALSE\t0\t{name}\t{value}\n")
+                            cookies_arg = ["--cookies", COOKIES_FILE]
+                    except Exception as e:
+                        logger.error(f"Chrome cookies error: {e}")
 
-            if result.returncode != 0:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=f"❌ Не удалось скачать .torrent файл.\n\n{result.stderr[:500] if result.stderr else 'Unknown error'}",
-                    parse_mode="HTML"
-                )
+            # Use curl to download the .torrent file
+            curl_cmd = ["curl", "-s", "-L", "-o", torrent_path]
+            if cookies_arg:
+                curl_cmd.extend(cookies_arg)
+            else:
+                curl_cmd.extend(["-b", COOKIES_FILE] if os.path.exists(COOKIES_FILE) else [])
+            curl_cmd.append(download_url)
+
+            result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=60)
+
+            if result.returncode != 0 or not os.path.exists(torrent_path) or os.path.getsize(torrent_path) == 0:
+                # Check if we got an HTML page (login required)
+                with open(torrent_path, "r", errors="ignore") as f:
+                    content = f.read()[:500]
+                if "login" in content.lower() or "<html" in content.lower():
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="⚠️ Rutracker требует авторизацию.\n\n"
+                             "Для скачивания торрентов с rutracker:\n"
+                             "1. Экспортируйте cookies из браузера в файл `rutracker_cookies.txt` (формат Netscape)\n"
+                             "2. Положите файл в папку бота: `/home/bots/video_downloader/rutracker_cookies.txt`\n\n"
+                             "Или укажите логин/пароль от rutracker в .env",
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"❌ Не удалось скачать .torrent файл.\n\n{result.stderr[:300] if result.stderr else 'Unknown error'}",
+                        parse_mode="HTML"
+                    )
                 return
 
-            # Find the downloaded torrent file
-            for f in os.listdir(TORRENT_DIR):
-                if f.startswith("torrent_") and f.endswith(".torrent"):
-                    torrent_path = os.path.join(TORRENT_DIR, f)
-                    break
             torrent_arg = torrent_path
         else:
             # Direct .torrent URL

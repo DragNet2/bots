@@ -662,6 +662,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         parse_mode="HTML"
                     )
                 elif need_transcode:
+                    logger.info("Entering transcoding branch...")
                     # Transcode to smaller size / convert AVI to MP4
                     transcoded_path = final_path + ".transcoded.mp4"
                     await bot.edit_message_text(

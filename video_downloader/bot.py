@@ -39,7 +39,7 @@ async def handle_message(message: types.Message):
     text = message.text or ""
 
     # Check if it's a VK video link
-    if "vk.com" not in text.lower():
+    if "vk.com" not in text.lower() and "vkvideo.ru" not in text.lower():
         await message.answer("Отправьте ссылку на видео из ВКонтакте.")
         return
 

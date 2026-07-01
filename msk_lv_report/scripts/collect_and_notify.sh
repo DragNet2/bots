@@ -209,8 +209,7 @@ format_message() {
         torrent_text="идёт загрузка"
     fi
 
-    local message="📊 <b>Мониторинг PostgreSQL</b>
-⏰ $timestamp
+    local message="⏰ $timestamp
 
 🇷🇺 <b>MSK</b> (Основной сервер)
 ├─ 💾 Размер БД: <code>$msk_db_size</code>

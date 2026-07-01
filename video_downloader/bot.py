@@ -475,24 +475,20 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             )
             if info_result.returncode == 0:
                 output = info_result.stdout
-                logger.info(f"aria2 --show-files output: {output[:500]}")
                 for line in output.split("\n"):
                     if "Total Length:" in line:
                         size_str = line.split("Total Length:")[1].strip()
                         # Format: "1.4GiB (1,567,434,752)" or "1,567,434,752"
                         import re
-                        match = re.search(r'[\d,]+', size_str.replace(",", ""))
+                        # Try to find bytes in parentheses first: (1,567,434,752)
+                        match = re.search(r'\(([\d,]+)\)', size_str)
                         if match:
-                            total_size = int(match.group().replace(",", ""))
-                        elif "GiB" in size_str:
+                            total_size = int(match.group(1).replace(",", ""))
+                        else:
+                            # Try GiB format: 1.4GiB
                             match = re.search(r'([\d.]+)GiB', size_str)
                             if match:
                                 total_size = int(float(match.group(1)) * 1024 * 1024 * 1024)
-                        elif "MiB" in size_str:
-                            match = re.search(r'([\d.]+)MiB', size_str)
-                            if match:
-                                total_size = int(float(match.group(1)) * 1024 * 1024)
-                        logger.info(f"Parsed total_size: {total_size}")
         except Exception as e:
             logger.error(f"Failed to get torrent size: {e}")
 

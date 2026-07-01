@@ -616,17 +616,19 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
             # Send file to user
             final_path = os.path.join(download_dir, final_file)
-            is_video = any(final_file.lower().endswith(ext) for ext in [".avi", ".mp4", ".mkv", ".mov", ".webm", ".flv"])
-            need_transcode = is_video and final_size > 1.9 * 1024 * 1024 * 1024  # > 1.9GB
+            is_avi = final_file.lower().endswith(".avi")
+            is_mp4 = final_file.lower().endswith(".mp4")
+            is_streamable = any(final_file.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".flv"])
+            need_transcode = is_avi or final_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB or AVI
 
             try:
-                if is_video and not need_transcode:
+                if is_streamable and not need_transcode:
                     # Send as video - use file path for streaming
                     await bot.send_video(
                         chat_id=chat_id,
                         video=types.FSInputFile(final_path)
                     )
-                elif is_video and need_transcode:
+                elif (is_streamable or is_avi) and need_transcode:
                     # Transcode to smaller size
                     transcoded_path = final_path + ".transcoded.mp4"
                     await bot.edit_message_text(

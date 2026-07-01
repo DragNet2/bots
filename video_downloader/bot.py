@@ -653,16 +653,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка в чат завершена!",
                         parse_mode="HTML"
                     )
-                elif is_avi:
-                    # AVI needs manual download - Telegram can't play it
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n⚠️ AVI файлы не воспроизводятся в Telegram.\n\n📁 Файл сохранён на сервере. Скоро добавлю возможность скачивания.",
-                        parse_mode="HTML"
-                    )
-                elif (is_streamable or is_avi) and need_transcode:
-                    # Transcode to smaller size
+                elif need_transcode:
+                    # Transcode to smaller size / convert AVI to MP4
                     transcoded_path = final_path + ".transcoded.mp4"
                     await bot.edit_message_text(
                         chat_id=chat_id,
@@ -699,6 +691,12 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                                 video=types.FSInputFile(transcoded_path)
                             )
                             os.remove(transcoded_path)
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка в чат завершена!",
+                                parse_mode="HTML"
+                            )
                         except Exception as e:
                             logger.error(f"Failed to send transcoded video: {e}")
                             await bot.edit_message_text(

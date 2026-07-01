@@ -665,12 +665,15 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     logger.info("Entering transcoding branch...")
                     # Transcode to smaller size / convert AVI to MP4
                     transcoded_path = final_path + ".transcoded.mp4"
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n🔄 Перекодирование видео для отправки...",
-                        parse_mode="HTML"
-                    )
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n🔄 Перекодирование видео для отправки...",
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to edit message before transcoding: {e}")
 
                     async def transcode_progress(percent, total):
                         bar = progress_bar(percent, 100)
@@ -684,7 +687,13 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         except:
                             pass
 
-                    success = await transcode_video(final_path, transcoded_path, max_size_mb=1800, progress_callback=transcode_progress)
+                    logger.info(f"Starting transcode: {final_path} -> {transcoded_path}")
+                    try:
+                        success = await transcode_video(final_path, transcoded_path, max_size_mb=1800, progress_callback=transcode_progress)
+                        logger.info(f"Transcode result: success={success}, exists={os.path.exists(transcoded_path)}")
+                    except Exception as e:
+                        logger.error(f"Transcode failed with exception: {e}")
+                        success = False
 
                     if success and os.path.exists(transcoded_path):
                         transcoded_size = os.path.getsize(transcoded_path)

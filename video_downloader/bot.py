@@ -576,9 +576,6 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
             await asyncio.sleep(5)
 
-        # Check result - process already finished, aria2_exit_code is set
-        logger.info(f"Torrent download loop finished. exit_code={aria2_exit_code}, final_file={final_file}, final_size={final_size}")
-
         # Find final file
         final_file = None
         final_size = 0
@@ -591,6 +588,9 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         final_size = os.path.getsize(fpath)
         except:
             pass
+
+        # Check result - process already finished, aria2_exit_code is set
+        logger.info(f"Torrent download loop finished. exit_code={aria2_exit_code}, final_file={final_file}, final_size={final_size}")
 
         if final_file and final_size > 0 and aria2_exit_code == 0 and (total_size == 0 or abs(final_size - total_size) < 1024*1024):
             download_success = True

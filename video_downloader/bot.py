@@ -553,6 +553,16 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     stable_count += 1
                     if stable_count >= 3:  # 3 consecutive same sizes = complete
                         logger.info(f"Download complete: {current_size} bytes (stable for 3 checks)")
+                        # Kill aria2 - download is done
+                        try:
+                            process.terminate()
+                            process.wait(timeout=5)
+                        except:
+                            try:
+                                process.kill()
+                            except:
+                                pass
+                        aria2_exit_code = 0
                         break
                 else:
                     stable_count = 0

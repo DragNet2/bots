@@ -518,6 +518,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         stable_count = 0  # Count consecutive checks with same size (download complete)
         max_wait = 600  # 10 minutes max
         start_time = asyncio.get_event_loop().time()
+        aria2_exit_code = None
+        aria2_stderr = ""
 
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
@@ -537,6 +539,12 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
             # Check if process finished
             if process.poll() is not None:
+                # Check exit status
+                aria2_exit_code = process.wait()
+                if aria2_exit_code != 0:
+                    stdout, stderr = process.communicate()
+                    aria2_stderr = stderr.decode()[:200] if stderr else ''
+                    logger.error(f"aria2 exited with code {aria2_exit_code}: {aria2_stderr}")
                 break
 
             # Check if download is complete (size matches total and stable)
@@ -544,6 +552,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 if current_size == last_size:
                     stable_count += 1
                     if stable_count >= 3:  # 3 consecutive same sizes = complete
+                        logger.info(f"Download complete: {current_size} bytes (stable for 3 checks)")
                         break
                 else:
                     stable_count = 0
@@ -567,8 +576,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
             await asyncio.sleep(5)
 
-        # Check result
-        _, stderr = process.communicate()
+        # Check result - process already finished, aria2_exit_code is set
+        logger.info(f"Torrent download loop finished. exit_code={aria2_exit_code}, final_file={final_file}, final_size={final_size}")
 
         # Find final file
         final_file = None
@@ -583,7 +592,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         except:
             pass
 
-        if final_file and final_size > 0 and (total_size == 0 or abs(final_size - total_size) < 1024*1024):
+        if final_file and final_size > 0 and aria2_exit_code == 0 and (total_size == 0 or abs(final_size - total_size) < 1024*1024):
             download_success = True
             try:
                 await bot.edit_message_text(

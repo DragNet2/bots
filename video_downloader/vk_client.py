@@ -68,6 +68,28 @@ class VKClient:
 
         return None
 
+    async def get_video_info(self, url: str) -> dict | None:
+        """Get video info (title and URL) using yt-dlp."""
+        venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
+        yt_dlp_path = f"{venv_bin}/yt-dlp"
+        try:
+            result = subprocess.run(
+                [yt_dlp_path, "--dump-json", "--no-playlist", url],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                import json
+                data = json.loads(result.stdout.strip())
+                return {
+                    "title": data.get("title", "Без названия"),
+                    "url": data.get("url") or data.get("webpage_url"),
+                }
+        except Exception as e:
+            print(f"yt-dlp get_video_info error: {e}")
+        return None
+
     async def download_video(self, url: str, output_path: str) -> bool:
         """Download video using yt-dlp."""
         venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"

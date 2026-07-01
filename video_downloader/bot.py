@@ -97,18 +97,19 @@ async def process_download(message: types.Message, url: str):
     """Process a single video download."""
     global is_downloading
 
-    video_url = None
     download_success = False
     task_id = str(uuid.uuid4())[:8]
     temp_path = f"/tmp/vk_video_{task_id}.mp4"
 
     try:
-        video_url = await vk.get_video_url(url)
+        video_info = await vk.get_video_info(url)
 
-        if not video_url:
-            await message.answer("❌ Не удалось получить ссылку на видео. Проверьте ссылку.")
+        if not video_info or not video_info.get("url"):
+            await message.answer("❌ Не удалось получить информацию о видео. Проверьте ссылку.")
             return
 
+        video_title = video_info.get("title", "Без названия")
+        video_url = video_info["url"]
         video_link = f'<a href="{escape(video_url)}">🔗 Ссылка на видео</a>'
 
         async def on_progress(downloaded, total, current_bytes, total_bytes):
@@ -117,6 +118,7 @@ async def process_download(message: types.Message, url: str):
             if total_bytes > 0:
                 size_str = f" ({format_size(current_bytes)} / {format_size(total_bytes)})"
             await message.edit_text(
+                f"{escape(video_title)}\n\n"
                 f"{video_link}\n\n"
                 f"⏬ Скачивание...\n"
                 f"{bar}{size_str}",
@@ -127,6 +129,7 @@ async def process_download(message: types.Message, url: str):
 
         if not success:
             await message.edit_text(
+                f"{escape(video_title)}\n\n"
                 f"{video_link}\n\n"
                 f"❌ Скачивание прервано. Повторите команду с той же ссылкой для докачки.\n\n"
                 f"(Файл сохранён для возобновления)",
@@ -143,6 +146,7 @@ async def process_download(message: types.Message, url: str):
         file_size = os.path.getsize(temp_path)
 
         await message.edit_text(
+            f"{escape(video_title)}\n\n"
             f"{video_link}\n\n"
             f"✅ Скачивание завершено ({format_size(file_size)})\n\n"
             f"⏫ Загружаю в чат...",
@@ -157,6 +161,7 @@ async def process_download(message: types.Message, url: str):
                     )
                 )
             await message.edit_text(
+                f"{escape(video_title)}\n\n"
                 f"{video_link}\n\n"
                 f"✅ Скачивание завершено ({format_size(file_size)})\n\n"
                 f"✅ Загрузка в чат завершена!",

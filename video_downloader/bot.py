@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import subprocess
-import threading
+import uuid
 from html import escape
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -19,7 +19,10 @@ bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 dp = Dispatcher()
 vk = VKClient()
 
-PROGRESS_EMOJI = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "▘", "▝", "▀"]
+# Download queue
+download_queue = asyncio.Queue()
+is_downloading = False
+queue_task = None
 
 
 def progress_bar(current: float, total: float, width: int = 20) -> str:
@@ -58,7 +61,6 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
 
     downloaded = 0
     total = 0
-    last_line = ""
 
     while True:
         line = process.stdout.readline()
@@ -66,19 +68,13 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
             break
 
         line = line.strip()
-        if line:
-            last_line = line
 
-        # Parse yt-dlp output for progress
-        # Look for patterns like: [download]  10.5% of 13.57MiB at  1.23MiB/s ETA 00:30
         if "[download]" in line and "%" in line:
             try:
-                # Extract percentage
                 pct_idx = line.index("%")
                 pct_str = line[pct_idx-5:pct_idx].strip()
                 downloaded = float(pct_str.replace(",", "."))
 
-                # Extract total size
                 if "of" in line and "at" in line:
                     size_str = line.split("of")[1].split("at")[0].strip()
                     if "MiB" in size_str:
@@ -88,9 +84,7 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
                     elif "KB" in size_str:
                         total = float(size_str.replace("KB", "")) * 1024
 
-                # Calculate downloaded bytes
                 current_bytes = downloaded / 100 * total if total > 0 else 0
-
                 await progress_callback(downloaded, 100, current_bytes, total)
             except:
                 pass
@@ -99,66 +93,40 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
     return return_code == 0
 
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer(
-        "Привет! Отправь мне ссылку на видео из ВКонтакте, "
-        "и я перешлю его тебе."
-    )
+async def process_download(message: types.Message, url: str):
+    """Process a single video download."""
+    global is_downloading
 
-
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    await message.answer(
-        "Просто отправь ссылку на видео из ВК (публичное видео).\n"
-        "Пример: https://vk.com/video-123456789_123456789"
-    )
-
-
-@dp.message()
-async def handle_message(message: types.Message):
-    text = message.text or ""
-
-    # Check if it's a VK video link
-    if "vk.com" not in text.lower() and "vkvideo.ru" not in text.lower():
-        await message.answer("Отправьте ссылку на видео из ВКонтакте.")
-        return
-
-    # Initial message
-    status_msg = await message.answer("⏳ Приступаю к задаче...")
-
-    temp_path = "/tmp/vk_video.mp4"
     video_url = None
     download_success = False
+    task_id = str(uuid.uuid4())[:8]
+    temp_path = f"/tmp/vk_video_{task_id}.mp4"
 
     try:
-        # Get video URL first
-        video_url = await vk.get_video_url(text)
+        video_url = await vk.get_video_url(url)
 
         if not video_url:
-            await status_msg.edit_text("❌ Не удалось получить ссылку на видео. Проверьте ссылку.")
+            await message.answer("❌ Не удалось получить ссылку на видео. Проверьте ссылку.")
             return
 
-        # Format video URL as HTML link
         video_link = f'<a href="{escape(video_url)}">🔗 Ссылка на видео</a>'
 
-        # Download with progress
-        async def on_progress(downloaded: float, total: float, current_bytes: float, total_bytes: float):
+        async def on_progress(downloaded, total, current_bytes, total_bytes):
             bar = progress_bar(downloaded, 100)
             size_str = ""
             if total_bytes > 0:
                 size_str = f" ({format_size(current_bytes)} / {format_size(total_bytes)})"
-            await status_msg.edit_text(
+            await message.edit_text(
                 f"{video_link}\n\n"
-                f"⏬ Приступил к скачиванию...\n"
+                f"⏬ Скачивание...\n"
                 f"{bar}{size_str}",
                 parse_mode="HTML"
             )
 
-        success = await download_with_progress(text, temp_path, on_progress)
+        success = await download_with_progress(url, temp_path, on_progress)
 
         if not success:
-            await status_msg.edit_text(
+            await message.edit_text(
                 f"{video_link}\n\n"
                 f"❌ Скачивание прервано. Повторите команду с той же ссылкой для докачки.\n\n"
                 f"(Файл сохранён для возобновления)",
@@ -168,18 +136,16 @@ async def handle_message(message: types.Message):
 
         download_success = True
 
-        # Check file exists
         if not os.path.exists(temp_path):
-            await status_msg.edit_text("❌ Файл не был создан.")
+            await message.edit_text("❌ Файл не был создан.")
             return
 
         file_size = os.path.getsize(temp_path)
 
-        # Send video with progress
-        await status_msg.edit_text(
+        await message.edit_text(
             f"{video_link}\n\n"
             f"✅ Скачивание завершено ({format_size(file_size)})\n\n"
-            f"⏫ Приступаю к загрузке видео в чат...",
+            f"⏫ Загружаю в чат...",
             parse_mode="HTML"
         )
 
@@ -190,7 +156,7 @@ async def handle_message(message: types.Message):
                         video_file.read(), filename="video.mp4"
                     )
                 )
-            await status_msg.edit_text(
+            await message.edit_text(
                 f"{video_link}\n\n"
                 f"✅ Скачивание завершено ({format_size(file_size)})\n\n"
                 f"✅ Загрузка в чат завершена!",
@@ -198,22 +164,116 @@ async def handle_message(message: types.Message):
             )
         except Exception as e:
             logger.error(f"Error sending video: {e}")
-            await status_msg.edit_text(f"❌ Ошибка при отправке видео: {e}")
+            await message.edit_text(f"❌ Ошибка при отправке видео: {e}")
 
     except Exception as e:
         logger.error(f"Error: {e}")
         try:
-            await status_msg.edit_text(f"❌ Ошибка: {e}")
+            await message.edit_text(f"❌ Ошибка: {e}")
         except:
             await message.answer(f"❌ Ошибка: {e}")
 
     finally:
-        # Only delete file if download was successful (sent to user)
         if download_success and os.path.exists(temp_path):
             os.remove(temp_path)
 
+    is_downloading = False
+
+
+async def queue_worker():
+    """Background worker that processes the download queue."""
+    global is_downloading
+
+    while True:
+        try:
+            # Wait for next item in queue
+            message, url = await download_queue.get()
+
+            is_downloading = True
+
+            try:
+                await message.edit_text("⏳ Начинаю скачивание...")
+                await process_download(message, url)
+            finally:
+                download_queue.task_done()
+
+                # If queue has more items, continue processing
+                if not download_queue.empty():
+                    is_downloading = False
+                    continue
+                else:
+                    is_downloading = False
+                    # Wait a bit before checking queue again
+                    await asyncio.sleep(0.5)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Queue worker error: {e}")
+            is_downloading = False
+            await asyncio.sleep(1)
+
+
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "Привет! Отправь мне ссылку на видео из ВКонтакте, "
+        "и я перешлю его тебе.\n\n"
+        "Можно отправлять несколько ссылок — они будут обработаны по очереди."
+    )
+
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer(
+        "Просто отправь ссылку на видео из ВК (публичное видео).\n"
+        "Можно отправлять несколько ссылок — они встанут в очередь.\n\n"
+        "Пример: https://vk.com/video-123456789_123456789"
+    )
+
+
+@dp.message(Command("queue"))
+async def cmd_queue(message: types.Message):
+    """Check current queue status."""
+    if download_queue.empty():
+        if is_downloading:
+            await message.answer("🎬 Сейчас скачивается видео. Очередь пуста.")
+        else:
+            await message.answer("✅ Очередь пуста, бот в режиме ожидания.")
+    else:
+        count = download_queue.qsize()
+        await message.answer(f"📋 В очереди: {count} видео")
+
+
+@dp.message()
+async def handle_message(message: types.Message):
+    global queue_task
+
+    text = message.text or ""
+
+    # Check if it's a VK video link
+    if "vk.com" not in text.lower() and "vkvideo.ru" not in text.lower():
+        await message.answer("Отправьте ссылку на видео из ВКонтакте.")
+        return
+
+    # Start queue worker if not running
+    if queue_task is None or queue_task.done():
+        queue_task = asyncio.create_task(queue_worker())
+
+    # Add to queue
+    await download_queue.put((message, text))
+
+    queue_size = download_queue.qsize()
+
+    if queue_size == 1:
+        await message.answer("⏳ Видео в очереди на скачивание...")
+    else:
+        await message.answer(f"📋 Видео добавлено в очередь. Позиция: {queue_size}")
+
 
 async def main():
+    global queue_task
+    queue_task = asyncio.create_task(queue_worker())
     await dp.start_polling(bot)
 
 

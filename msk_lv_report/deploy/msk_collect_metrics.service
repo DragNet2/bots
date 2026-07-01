@@ -1,0 +1,13 @@
+[Unit]
+Description=Collect PostgreSQL metrics on MSK server
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/msk_lv_bot
+ExecStart=/usr/bin/python3 /opt/msk_lv_bot/scripts/collect_msk_metrics.py
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

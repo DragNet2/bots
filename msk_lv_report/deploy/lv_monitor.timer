@@ -1,0 +1,9 @@
+[Unit]
+Description=Timer for LV monitoring (collects MSK metrics and sends to Telegram)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

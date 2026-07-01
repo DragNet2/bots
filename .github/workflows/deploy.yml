@@ -1,0 +1,68 @@
+name: Deploy Bots to LV Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bots/msk_lv_report/**'
+      - 'bots/tasktracker_bot/**'
+      - 'bots/vpn_switch_bot/**'
+      - 'bots/ym_downloader/**'
+      - 'bots/video_downloader/**'
+  workflow_dispatch:
+    inputs:
+      bot:
+        description: 'Bot to deploy'
+        required: true
+        type: choice
+        options:
+          - msk_lv_report
+          - tasktracker_bot
+          - vpn_switch_bot
+          - ym_downloader
+          - video_downloader
+          - all
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'bots/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine bots to deploy
+        id: bots
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            if [ "${{ inputs.bot }}" == "all" ]; then
+              echo "bots=msk_lv_report tasktracker_bot vpn_switch_bot ym_downloader video_downloader" >> $GITHUB_OUTPUT
+            else
+              echo "bots=${{ inputs.bot }}" >> $GITHUB_OUTPUT
+            fi
+          else
+            # Get changed bot directories
+            CHANGED=$(git diff --name-only HEAD~1 HEAD | grep '^bots/' | cut -d/ -f2 | sort -u | tr '\n' ' ')
+            echo "bots=${CHANGED:-none}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.LV_SERVER_HOST }}
+          username: ${{ secrets.LV_SERVER_USER }}
+          key: ${{ secrets.LV_SERVER_SSH_KEY }}
+          port: ${{ secrets.LV_SERVER_PORT || '22' }}
+          envs: BOT_NAME
+          script: |
+            cd ~/bots/$BOT_NAME
+            git pull origin main
+            pip install -r requirements.txt
+            if [ -f "start.sh" ]; then
+              bash start.sh
+            else
+              systemctl restart $BOT_NAME
+            fi
+        env:
+          BOT_NAME: ${{ steps.bots.outputs.bots }}

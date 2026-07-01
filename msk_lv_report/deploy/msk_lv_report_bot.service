@@ -1,0 +1,15 @@
+[Unit]
+Description=MSK/LV Report Telegram Bot
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/msk_lv_report
+EnvironmentFile=/opt/msk_lv_report/.env
+ExecStart=/opt/msk_lv_report/venv/bin/python3 /opt/msk_lv_report/bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Collect metrics from MSK and LV, send to Telegram
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/msk_lv_bot
+ExecStart=/usr/bin/python3 /opt/msk_lv_bot/scripts/collect_and_notify.py
+Environment="PYTHONUNBUFFERED=1"
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Timer for MSK metrics collection
+Requires=msk_collect_metrics.service
+
+[Timer]
+OnCalendar=*:0/15
+
+[Install]
+WantedBy=timers.target

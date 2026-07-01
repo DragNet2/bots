@@ -368,22 +368,36 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
             torrent_arg = torrent_path
 
-        # Get torrent name for display
+        # Get magnet URI from torrent file
         aria2_path = get_aria2_bin()
-        info_result = subprocess.run(
-            [aria2_path, "--show-files", torrent_arg],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
+        magnet_uri = None
         torrent_name = f"Торрент #{task_id}"
-        if info_result.returncode == 0:
-            lines = info_result.stdout.strip().split("\n")
-            for line in lines:
-                if "Outfile" in line:
-                    torrent_name = line.split("Outfile=")[1].strip()[:100]
-                    break
+
+        try:
+            info_result = subprocess.run(
+                [aria2_path, "--show-files", torrent_arg],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if info_result.returncode == 0:
+                lines = info_result.stdout.strip().split("\n")
+                for line in lines:
+                    if "Magnet URI:" in line:
+                        magnet_uri = line.split("Magnet URI:")[1].strip()
+                    if "Name:" in line and "Total" not in line:
+                        torrent_name = line.split("Name:")[1].strip()[:100]
+        except Exception as e:
+            logger.error(f"Failed to get magnet URI: {e}")
+
+        if not magnet_uri:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text="❌ Не удалось извлечь magnet URI из торрента.",
+                parse_mode="HTML"
+            )
+            return
 
         await bot.edit_message_text(
             chat_id=chat_id,
@@ -392,9 +406,9 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             parse_mode="HTML"
         )
 
-        # Start aria2c in background
+        # Start aria2c in background with magnet URI
         process = subprocess.Popen(
-            [aria2_path, "-d", download_dir, "-i", torrent_arg, "--seed-time=0"],
+            [aria2_path, "-d", download_dir, "--bt-stop-timeout=60", magnet_uri],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

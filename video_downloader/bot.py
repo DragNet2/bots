@@ -508,9 +508,9 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         except Exception as e:
             logger.error(f"Failed to get torrent size: {e}")
 
-        # Start aria2c in background with magnet URI
+        # Start aria2c in background with .torrent file (not magnet - magnet needs DHT for metadata)
         process = subprocess.Popen(
-            [aria2_path, "-d", download_dir, "--bt-stop-timeout=300", magnet_uri],
+            [aria2_path, "-d", download_dir, "--bt-stop-timeout=300", torrent_arg],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

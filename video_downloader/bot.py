@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import subprocess
 import uuid
 from html import escape
@@ -19,10 +20,14 @@ bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 dp = Dispatcher()
 vk = VKClient()
 
-# Download queue
-download_queue = asyncio.Queue()
+# Video download queue
+video_queue = asyncio.Queue()
 is_downloading = False
 queue_task = None
+
+# Torrent download directory
+TORRENT_DIR = "/tmp/torrents"
+os.makedirs(TORRENT_DIR, exist_ok=True)
 
 
 def progress_bar(current: float, total: float, width: int = 20) -> str:
@@ -93,7 +98,7 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
     return return_code == 0
 
 
-async def process_download(chat_id: int, message_id: int, url: str):
+async def process_video_download(chat_id: int, message_id: int, url: str):
     """Process a single video download."""
     global is_downloading, bot
 
@@ -101,18 +106,15 @@ async def process_download(chat_id: int, message_id: int, url: str):
     task_id = str(uuid.uuid4())[:8]
     temp_path = f"/tmp/vk_video_{task_id}.mp4"
 
-    status_message = None
     try:
-        # Get the status message to edit
         try:
-            status_message = await bot.edit_message_text(
+            await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
                 text="⏳ Начинаю скачивание..."
             )
         except Exception as e:
             logger.error(f"Could not edit message: {e}")
-            # Message might be too old to edit, continue anyway
 
         video_info = await vk.get_video_info(url)
 
@@ -218,29 +220,26 @@ async def process_download(chat_id: int, message_id: int, url: str):
     is_downloading = False
 
 
-async def queue_worker():
-    """Background worker that processes the download queue."""
+async def video_queue_worker():
+    """Background worker that processes the video download queue."""
     global is_downloading
 
     while True:
         try:
-            # Wait for next item in queue
-            chat_id, message_id, url = await download_queue.get()
+            chat_id, message_id, url = await video_queue.get()
 
             is_downloading = True
 
             try:
-                await process_download(chat_id, message_id, url)
+                await process_video_download(chat_id, message_id, url)
             finally:
-                download_queue.task_done()
+                video_queue.task_done()
 
-                # If queue has more items, continue processing
-                if not download_queue.empty():
+                if not video_queue.empty():
                     is_downloading = False
                     continue
                 else:
                     is_downloading = False
-                    # Wait a bit before checking queue again
                     await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
@@ -251,35 +250,255 @@ async def queue_worker():
             await asyncio.sleep(1)
 
 
+# ====== TORRENT FUNCTIONS ======
+
+def get_aria2_bin() -> str:
+    """Get path to aria2c."""
+    return os.path.dirname(os.path.abspath(__file__)) + "/venv/bin/aria2c"
+
+
+def is_torrent_url(url: str) -> bool:
+    """Check if URL is a torrent/magnet link."""
+    url_lower = url.lower()
+    return any([
+        "rutracker.org" in url_lower and "dl.php" in url_lower,
+        url_lower.endswith(".torrent"),
+        url_lower.startswith("magnet:"),
+    ])
+
+
+def extract_rutracker_id(url: str) -> str | None:
+    """Extract topic ID from rutracker URL."""
+    match = re.search(r'dl\.php\?t=(\d+)', url)
+    if match:
+        return match.group(1)
+    match = re.search(r'topic_id=(\d+)', url)
+    if match:
+        return match.group(1)
+    return None
+
+
+async def download_torrent(chat_id: int, message_id: int, url: str):
+    """Download torrent file and start download with aria2."""
+    global bot
+
+    task_id = str(uuid.uuid4())[:8]
+    torrent_path = f"{TORRENT_DIR}/torrent_{task_id}.torrent"
+    download_dir = f"{TORRENT_DIR}/downloads_{task_id}"
+    os.makedirs(download_dir, exist_ok=True)
+
+    try:
+        # Determine torrent type and get file
+        if url.lower().startswith("magnet:"):
+            # Magnet link - save to file
+            with open(torrent_path.replace(".torrent", ".magnet"), "w") as f:
+                f.write(url)
+            torrent_arg = torrent_path.replace(".torrent", ".magnet")
+        elif "rutracker.org" in url.lower():
+            # Rutracker - need to download .torrent file
+            topic_id = extract_rutracker_id(url)
+            if not topic_id:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="❌ Не удалось извлечь ID торрента из ссылки."
+                )
+                return
+
+            # Use yt-dlp to download the .torrent file
+            venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
+            yt_dlp_path = f"{venv_bin}/yt-dlp"
+
+            result = subprocess.run(
+                [yt_dlp_path, "--cookies-from-browser", "chrome", "-o", torrent_path, "--no-playlist", url],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            if result.returncode != 0:
+                # Try without cookies (might work for public torrents)
+                result = subprocess.run(
+                    [yt_dlp_path, "-o", torrent_path, "--no-playlist", url],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+
+            if result.returncode != 0:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"❌ Не удалось скачать .torrent файл.\n\n{result.stderr[:500] if result.stderr else 'Unknown error'}",
+                    parse_mode="HTML"
+                )
+                return
+
+            # Find the downloaded torrent file
+            for f in os.listdir(TORRENT_DIR):
+                if f.startswith("torrent_") and f.endswith(".torrent"):
+                    torrent_path = os.path.join(TORRENT_DIR, f)
+                    break
+            torrent_arg = torrent_path
+        else:
+            # Direct .torrent URL
+            venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
+            aria2_path = f"{venv_bin}/aria2c"
+
+            result = subprocess.run(
+                [aria2_path, "-d", TORRENT_DIR, "-o", f"torrent_{task_id}.torrent", url],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            if result.returncode != 0:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"❌ Не удалось скачать .torrent файл.\n\n{result.stderr[:500] if result.stderr else 'Unknown error'}",
+                    parse_mode="HTML"
+                )
+                return
+
+            torrent_arg = torrent_path
+
+        # Get torrent name for display
+        aria2_path = get_aria2_bin()
+        info_result = subprocess.run(
+            [aria2_path, "--show-files", torrent_arg],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        torrent_name = f"Торрент #{task_id}"
+        if info_result.returncode == 0:
+            lines = info_result.stdout.strip().split("\n")
+            for line in lines:
+                if "Outfile" in line:
+                    torrent_name = line.split("Outfile=")[1].strip()[:100]
+                    break
+
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"📥 <b>{escape(torrent_name)}</b>\n\n⏬ Запускаю загрузку через aria2...",
+            parse_mode="HTML"
+        )
+
+        # Start aria2c in background
+        process = subprocess.Popen(
+            [aria2_path, "-d", download_dir, "-i", torrent_arg, "--seed-time=0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        # Wait a bit and check first progress
+        await asyncio.sleep(5)
+
+        # Check if aria2 is running
+        if process.poll() is not None:
+            # Process finished quickly - check for errors
+            _, stderr = process.communicate()
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"❌ Ошибка запуска торрента.\n\n{stderr.decode()[:500] if stderr else 'Unknown error'}",
+                parse_mode="HTML"
+            )
+            return
+
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Торрент запущен!\n\n💾 Файлы в: <code>{download_dir}</code>\n\n⏱ Статус: загрузка активна",
+            parse_mode="HTML"
+        )
+
+        # Note: torrent continues downloading in background
+        # To check status: aria2c --show-files <torrent_file>
+
+    except Exception as e:
+        logger.error(f"Torrent error: {e}")
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"❌ Ошибка: {e}"
+            )
+        except:
+            pass
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
         "Привет! Отправь мне ссылку на видео из ВКонтакте, "
         "и я перешлю его тебе.\n\n"
-        "Можно отправлять несколько ссылок — они будут обработаны по очереди."
+        "Можно отправлять несколько ссылок — они будут обработаны по очереди.\n\n"
+        "Также поддерживаются ссылки на Rutracker (.torrent, magnet)."
     )
 
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     await message.answer(
-        "Просто отправь ссылку на видео из ВК (публичное видео).\n"
-        "Можно отправлять несколько ссылок — они встанут в очередь.\n\n"
-        "Пример: https://vk.com/video-123456789_123456789"
+        "📹 <b>Видео из ВК:</b> отправь ссылку на видео\n"
+        "📥 <b>Торренты:</b> отправь ссылку Rutracker или magnet\n\n"
+        "Команды:\n"
+        "/queue — статус очереди\n"
+        "/torrents — активные загрузки",
+        parse_mode="HTML"
     )
 
 
 @dp.message(Command("queue"))
 async def cmd_queue(message: types.Message):
-    """Check current queue status."""
-    if download_queue.empty():
+    """Check current video queue status."""
+    if video_queue.empty():
         if is_downloading:
             await message.answer("🎬 Сейчас скачивается видео. Очередь пуста.")
         else:
             await message.answer("✅ Очередь пуста, бот в режиме ожидания.")
     else:
-        count = download_queue.qsize()
-        await message.answer(f"📋 В очереди: {count} видео")
+        count = video_queue.qsize()
+        await message.answer(f"📋 В очереди видео: {count}")
+
+
+@dp.message(Command("torrents"))
+async def cmd_torrents(message: types.Message):
+    """Show active torrent downloads."""
+    try:
+        aria2_path = get_aria2_bin()
+        # Check for running aria2 processes
+        result = subprocess.run(
+            ["ps", "aux"],
+            capture_output=True,
+            text=True,
+        )
+
+        active = []
+        for line in result.stdout.split("\n"):
+            if "aria2c" in line and "--show-files" not in line:
+                # Extract download dir
+                if "-d" in line:
+                    idx = line.index("-d")
+                    dir_part = line[idx:].split()[1] if len(line[idx:].split()) > 1 else ""
+                    if dir_part.startswith("/tmp/torrents"):
+                        task_id = dir_part.split("_")[-1]
+                        active.append(f"• Задача {task_id}: {dir_part}")
+
+        if active:
+            await message.answer(
+                f"📥 <b>Активные загрузки:</b>\n" + "\n".join(active) +
+                f"\n\n💾 Папка загрузок: <code>{TORRENT_DIR}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer("✅ Нет активных загрузок.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
 
 
 @dp.message()
@@ -288,22 +507,29 @@ async def handle_message(message: types.Message):
 
     text = message.text or ""
 
+    # Check if it's a torrent link
+    if is_torrent_url(text):
+        # Handle torrent download
+        status_msg = await message.answer("📥 Получена ссылка на торрент...")
+        asyncio.create_task(download_torrent(message.chat.id, status_msg.message_id, text))
+        return
+
     # Check if it's a VK video link
     if "vk.com" not in text.lower() and "vkvideo.ru" not in text.lower():
-        await message.answer("Отправьте ссылку на видео из ВКонтакте.")
+        await message.answer("Отправьте ссылку на видео из ВКонтакте или торрент.")
         return
 
     # Start queue worker if not running
     if queue_task is None or queue_task.done():
-        queue_task = asyncio.create_task(queue_worker())
+        queue_task = asyncio.create_task(video_queue_worker())
 
     # Send initial message and get its ID
     status_msg = await message.answer("⏳ Видео в очереди на скачивание...")
 
     # Add to queue: (chat_id, message_id, url)
-    await download_queue.put((message.chat.id, status_msg.message_id, text))
+    await video_queue.put((message.chat.id, status_msg.message_id, text))
 
-    queue_size = download_queue.qsize()
+    queue_size = video_queue.qsize()
 
     if queue_size > 1:
         await status_msg.edit_text(f"📋 Видео добавлено в очередь. Позиция: {queue_size}")
@@ -311,7 +537,7 @@ async def handle_message(message: types.Message):
 
 async def main():
     global queue_task
-    queue_task = asyncio.create_task(queue_worker())
+    queue_task = asyncio.create_task(video_queue_worker())
     await dp.start_polling(bot)
 
 

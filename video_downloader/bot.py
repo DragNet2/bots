@@ -52,6 +52,64 @@ def format_size(size_bytes: float) -> str:
         return f"{size_bytes/1024/1024/1024:.2f}GB"
 
 
+async def transcode_video(input_path: str, output_path: str, max_size_mb: int = 1900, progress_callback=None):
+    """Transcode video to fit within max_size_mb using FFmpeg."""
+    import re
+
+    # Get input duration
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", input_path],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    duration = float(probe.stdout.strip()) if probe.returncode == 0 else 0
+
+    # Calculate target bitrate: target_size / duration * 8 (bits per byte)
+    target_bitrate = f"{(max_size_mb * 8 * 1000) // duration}k" if duration > 0 else "2000k"
+
+    process = subprocess.Popen(
+        [
+            "ffmpeg", "-y", "-i", input_path,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-b:v", target_bitrate,
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-progress", "pipe:1",
+            output_path
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    last_update = 0
+    while True:
+        line = process.stdout.readline()
+        if not line and process.poll() is not None:
+            break
+
+        line = line.strip()
+        if line.startswith("out_time_ms=") or (duration > 0 and "time=" in line):
+            try:
+                if duration > 0:
+                    # Parse time=00:01:23.45 format
+                    time_match = re.search(r'time=(\d+):(\d+):(\d+\.\d+)', line)
+                    if time_match:
+                        hours = int(time_match.group(1))
+                        minutes = int(time_match.group(2))
+                        seconds = float(time_match.group(3))
+                        current_time = hours * 3600 + minutes * 60 + seconds
+                        percent = min(100, (current_time / duration) * 100)
+                        if progress_callback and (asyncio.get_event_loop().time() - last_update > 5):
+                            await progress_callback(percent, 100)
+                            last_update = asyncio.get_event_loop().time()
+            except:
+                pass
+
+    return_code = process.wait()
+    return return_code == 0
+
+
 async def download_with_progress(url: str, output_path: str, progress_callback):
     """Download video using yt-dlp with progress reporting."""
     venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
@@ -544,22 +602,68 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             # Send file to user
             final_path = os.path.join(download_dir, final_file)
             is_video = any(final_file.lower().endswith(ext) for ext in [".avi", ".mp4", ".mkv", ".mov", ".webm", ".flv"])
+            need_transcode = is_video and final_size > 1.9 * 1024 * 1024 * 1024  # > 1.9GB
+
             try:
-                if is_video and final_size < 2 * 1024 * 1024 * 1024:  # < 2GB
+                if is_video and not need_transcode:
                     # Send as video - use file path for streaming
                     await bot.send_video(
                         chat_id=chat_id,
                         video=types.FSInputFile(final_path)
                     )
-                elif is_video and final_size >= 2 * 1024 * 1024 * 1024:
-                    # Too large even for video
+                elif is_video and need_transcode:
+                    # Transcode to smaller size
+                    transcoded_path = final_path + ".transcoded.mp4"
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
-                        text=f"⚠️ Файл слишком большой для отправки в Telegram ({format_size(final_size)}).\n\nФайл сохранён на сервере.",
+                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n🔄 Перекодирование видео для отправки...",
                         parse_mode="HTML"
                     )
-                    return
+
+                    async def transcode_progress(percent, total):
+                        bar = progress_bar(percent, 100)
+                        try:
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                text=f"📥 <b>{escape(torrent_name)}</b>\n\n🔄 Перекодирование...\n{bar}",
+                                parse_mode="HTML"
+                            )
+                        except:
+                            pass
+
+                    success = await transcode_video(final_path, transcoded_path, max_size_mb=1800, progress_callback=transcode_progress)
+
+                    if success and os.path.exists(transcoded_path):
+                        transcoded_size = os.path.getsize(transcoded_path)
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Перекодирование завершено ({format_size(transcoded_size)})\n\n⏫ Загружаю в чат...",
+                            parse_mode="HTML"
+                        )
+                        try:
+                            await bot.send_video(
+                                chat_id=chat_id,
+                                video=types.FSInputFile(transcoded_path)
+                            )
+                            os.remove(transcoded_path)
+                        except Exception as e:
+                            logger.error(f"Failed to send transcoded video: {e}")
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                text=f"❌ Ошибка отправки: {e}",
+                                parse_mode="HTML"
+                            )
+                    else:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"❌ Ошибка перекодирования.",
+                            parse_mode="HTML"
+                        )
                 else:
                     # Send as document - use file path for streaming
                     await bot.send_document(

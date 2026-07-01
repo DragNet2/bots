@@ -13,7 +13,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # Конфигурация
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8369771647:AAHyS9haEDBtpzjOlAyUWcpar4gbk-trfyg")
-SCRIPT_PATH = os.getenv("REPORT_SCRIPT", "/opt/msk_lv_report/scripts/collect_and_notify.sh")
+SCRIPT_PATH = os.getenv("REPORT_SCRIPT", "/home/bots/msk_lv_report/scripts/collect_and_notify.sh")
 
 # Разрешённые chat_id (каналы/группы), которым бот отвечает
 ALLOWED_CHATS = [

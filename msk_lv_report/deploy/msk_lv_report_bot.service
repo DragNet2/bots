@@ -5,9 +5,9 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/msk_lv_report
-EnvironmentFile=/opt/msk_lv_report/.env
-ExecStart=/opt/msk_lv_report/venv/bin/python3 /opt/msk_lv_report/bot.py
+WorkingDirectory=/home/bots/msk_lv_report
+EnvironmentFile=/home/bots/msk_lv_report/.env
+ExecStart=/home/bots/msk_lv_report/venv/bin/python3 /home/bots/msk_lv_report/bot.py
 Restart=always
 RestartSec=10
 

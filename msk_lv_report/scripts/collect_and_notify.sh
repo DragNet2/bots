@@ -26,7 +26,7 @@ MSK_HOST="${MSK_HOST:-195.209.214.24}"
 MSK_USER="${MSK_USER:-ubuntu}"
 MSK_KEY="${MSK_KEY:-/root/.ssh/id_ed25519_traefk}"
 MSK_METRICS_PATH="/tmp/msk_lv_metrics/msk_metrics.json"
-MSK_SCRIPT_PATH="/opt/msk_lv_report/scripts/collect_msk_metrics.sh"
+MSK_SCRIPT_PATH="/home/bots/msk_lv_report/scripts/collect_msk_metrics.sh"
 
 # Telegram
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"

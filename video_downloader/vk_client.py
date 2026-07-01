@@ -51,10 +51,12 @@ class VKClient:
 
     async def get_video_url(self, url: str) -> str | None:
         """Get direct video URL from VK video page using yt-dlp."""
+        venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
+        yt_dlp_path = f"{venv_bin}/yt-dlp"
         # Use yt-dlp to get direct URL
         try:
             result = subprocess.run(
-                ["yt-dlp", "--get-url", "-f", "best[ext=mp4]/best", url],
+                [yt_dlp_path, "--get-url", "-f", "best[ext=mp4]/best", url],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -68,13 +70,17 @@ class VKClient:
 
     async def download_video(self, url: str, output_path: str) -> bool:
         """Download video using yt-dlp."""
+        venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
+        yt_dlp_path = f"{venv_bin}/yt-dlp"
         try:
             result = subprocess.run(
-                ["yt-dlp", "-f", "best[ext=mp4]/best", "-o", output_path, url],
+                [yt_dlp_path, "-f", "best[ext=mp4]/best", "-o", output_path, url],
                 capture_output=True,
                 text=True,
                 timeout=300,
             )
+            if result.returncode != 0:
+                print(f"yt-dlp failed: {result.stderr}")
             return result.returncode == 0
         except Exception as e:
             print(f"yt-dlp download error: {e}")

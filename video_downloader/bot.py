@@ -7,6 +7,7 @@ import uuid
 from html import escape
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
 from vk_client import VKClient
@@ -24,6 +25,9 @@ vk = VKClient()
 video_queue = asyncio.Queue()
 is_downloading = False
 queue_task = None
+
+# Active torrents tracking
+active_torrents = {}  # task_id -> {name, size, status, download_dir, chat_id, message_id}
 
 # Torrent download directory
 TORRENT_DIR = "/tmp/torrents"
@@ -448,6 +452,18 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         except Exception as e:
             logger.error(f"Failed to get magnet URI: {e}")
 
+        # Register torrent in active_torrents
+        global active_torrents
+        active_torrents[task_id] = {
+            "name": torrent_name,
+            "size": total_size,
+            "status": "downloading",
+            "download_dir": download_dir,
+            "chat_id": chat_id,
+            "message_id": message_id,
+        }
+        logger.info(f"Registered torrent {task_id}: {torrent_name}")
+
         if not magnet_uri:
             await bot.edit_message_text(
                 chat_id=chat_id,
@@ -563,6 +579,9 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             except:
                                 pass
                         aria2_exit_code = 0
+                        # Update status to complete
+                        if task_id in active_torrents:
+                            active_torrents[task_id]["status"] = "complete"
                         break
                 else:
                     stable_count = 0
@@ -728,6 +747,11 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             )
         except:
             pass
+    finally:
+        # Remove from active_torrents
+        if task_id in active_torrents:
+            del active_torrents[task_id]
+            logger.info(f"Removed torrent {task_id} from active_torrents")
 
 
 @dp.message(Command("start"))
@@ -767,37 +791,81 @@ async def cmd_queue(message: types.Message):
 
 @dp.message(Command("torrents"))
 async def cmd_torrents(message: types.Message):
-    """Show active torrent downloads."""
-    try:
-        aria2_path = get_aria2_bin()
-        # Check for running aria2 processes
-        result = subprocess.run(
-            ["ps", "aux"],
-            capture_output=True,
-            text=True,
-        )
+    """Show active torrent downloads with inline keyboard."""
+    global active_torrents
 
-        active = []
-        for line in result.stdout.split("\n"):
-            if "aria2c" in line and "--show-files" not in line:
-                # Extract download dir
-                if "-d" in line:
-                    idx = line.index("-d")
-                    dir_part = line[idx:].split()[1] if len(line[idx:].split()) > 1 else ""
-                    if dir_part.startswith("/tmp/torrents"):
-                        task_id = dir_part.split("_")[-1]
-                        active.append(f"• Задача {task_id}: {dir_part}")
+    if not active_torrents:
+        await message.answer("✅ Нет активных загрузок.")
+        return
 
-        if active:
-            await message.answer(
-                f"📥 <b>Активные загрузки:</b>\n" + "\n".join(active) +
-                f"\n\n💾 Папка загрузок: <code>{TORRENT_DIR}</code>",
-                parse_mode="HTML"
-            )
+    # Build list of torrents
+    torrent_list = list(active_torrents.items())
+    total = len(torrent_list)
+
+    # Create message text
+    lines = ["📥 <b>Активные загрузки:</b>", ""]
+    keyboard = []
+
+    for i, (task_id, info) in enumerate(torrent_list, 1):
+        name = escape(info.get("name", "Без названия"))[:50]
+        size_str = format_size(info.get("size", 0))
+        status = info.get("status", "unknown")
+        status_emoji = {"downloading": "⏬", "seeding": "🌱", "complete": "✅"}.get(status, "⏳")
+
+        lines.append(f"{i}. {status_emoji} <code>{name}</code>")
+        lines.append(f"   💾 {size_str} | ID: {task_id}")
+        lines.append("")
+
+        # Add button with number
+        keyboard.append([InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"del_torrent_{task_id}")])
+
+    lines.append(f"Всего: {total}")
+    text = "\n".join(lines)
+
+    # Create inline keyboard
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    await message.answer(text, parse_mode="HTML", reply_markup=markup)
+
+
+@dp.callback_query()
+async def handle_callback(callback: types.CallbackQuery):
+    """Handle inline keyboard callbacks."""
+    global active_torrents
+
+    data = callback.data or ""
+
+    if data.startswith("del_torrent_"):
+        task_id = data.replace("del_torrent_", "")
+
+        if task_id in active_torrents:
+            info = active_torrents[task_id]
+            download_dir = info.get("download_dir", "")
+
+            # Kill aria2 process for this task
+            try:
+                subprocess.run(["pkill", "-f", f"downloads_{task_id}"], capture_output=True)
+            except:
+                pass
+
+            # Remove files
+            try:
+                if download_dir:
+                    subprocess.run(["rm", "-rf", download_dir], capture_output=True)
+                torrent_file = f"{TORRENT_DIR}/torrent_{task_id}.torrent"
+                subprocess.run(["rm", "-f", torrent_file], capture_output=True)
+            except:
+                pass
+
+            # Remove from active_torrents
+            del active_torrents[task_id]
+
+            await callback.answer(f"✅ Торрент {task_id} удалён")
+            await callback.message.edit_text(f"✅ Торрент удалён: {info.get('name', task_id)}")
         else:
-            await message.answer("✅ Нет активных загрузок.")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+            await callback.answer("❌ Торрент не найден", show_alert=True)
+    else:
+        await callback.answer("Неизвестная команда", show_alert=True)
 
 
 @dp.message()

@@ -92,7 +92,7 @@ async def transcode_video(input_path: str, output_path: str, max_size_mb: int = 
         if not line and process.poll() is not None:
             break
 
-        line = line.strip()
+        line = line.decode().strip()
         if line.startswith("out_time_ms=") or (duration > 0 and "time=" in line):
             try:
                 if duration > 0:

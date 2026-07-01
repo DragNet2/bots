@@ -647,6 +647,20 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         chat_id=chat_id,
                         video=types.FSInputFile(final_path)
                     )
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка в чат завершена!",
+                        parse_mode="HTML"
+                    )
+                elif is_avi:
+                    # AVI needs manual download - Telegram can't play it
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n⚠️ AVI файлы не воспроизводятся в Telegram.\n\n📁 Файл сохранён на сервере. Скоро добавлю возможность скачивания.",
+                        parse_mode="HTML"
+                    )
                 elif (is_streamable or is_avi) and need_transcode:
                     # Transcode to smaller size
                     transcoded_path = final_path + ".transcoded.mp4"

@@ -642,9 +642,10 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             # Send file to user
             final_path = os.path.join(download_dir, final_file)
             is_avi = final_file.lower().endswith(".avi")
+            is_wmv = final_file.lower().endswith(".wmv")
             is_mp4 = final_file.lower().endswith(".mp4")
             is_streamable = any(final_file.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".flv"])
-            need_transcode = is_avi or final_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB or AVI
+            need_transcode = is_avi or is_wmv or final_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB or AVI/WMV
             logger.info(f"Final check: is_avi={is_avi}, is_streamable={is_streamable}, need_transcode={need_transcode}, final_size={final_size}")
 
             try:
@@ -731,11 +732,19 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             parse_mode="HTML"
                         )
                 else:
-                    # Send as document - use file path for streaming
-                    await bot.send_document(
-                        chat_id=chat_id,
-                        document=types.FSInputFile(final_path)
-                    )
+                    # Send as document - use file path for streaming (max 50MB)
+                    if final_size > 50 * 1024 * 1024:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"❌ Файл слишком большой для отправки как документ ({format_size(final_size)}).",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        await bot.send_document(
+                            chat_id=chat_id,
+                            document=types.FSInputFile(final_path)
+                        )
                 
                 try:
                     await bot.edit_message_text(

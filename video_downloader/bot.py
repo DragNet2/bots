@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import threading
+from html import escape
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from dotenv import load_dotenv
@@ -131,14 +132,14 @@ async def handle_message(message: types.Message):
 
     try:
         # Get video URL first
-        await status_msg.edit_text(
-            "🔗 Есть ссылка на видео-файл\n\n⏳ Приступаю к скачиванию..."
-        )
         video_url = await vk.get_video_url(text)
 
         if not video_url:
             await status_msg.edit_text("❌ Не удалось получить ссылку на видео. Проверьте ссылку.")
             return
+
+        # Format video URL as HTML link
+        video_link = f'<a href="{escape(video_url)}">🔗 Ссылка на видео</a>'
 
         # Download with progress
         async def on_progress(downloaded: float, total: float, current_bytes: float, total_bytes: float):
@@ -147,9 +148,10 @@ async def handle_message(message: types.Message):
             if total_bytes > 0:
                 size_str = f" ({format_size(current_bytes)} / {format_size(total_bytes)})"
             await status_msg.edit_text(
-                f"🔗 Есть ссылка на видео-файл\n\n"
+                f"{video_link}\n\n"
                 f"⏬ Приступил к скачиванию...\n"
-                f"{bar}{size_str}"
+                f"{bar}{size_str}",
+                parse_mode="HTML"
             )
 
         success = await download_with_progress(text, temp_path, on_progress)
@@ -167,9 +169,10 @@ async def handle_message(message: types.Message):
 
         # Send video with progress
         await status_msg.edit_text(
-            f"🔗 Есть ссылка на видео-файл\n\n"
+            f"{video_link}\n\n"
             f"✅ Скачивание завершено ({format_size(file_size)})\n\n"
-            f"⏫ Приступаю к загрузке видео в чат..."
+            f"⏫ Приступаю к загрузке видео в чат...",
+            parse_mode="HTML"
         )
 
         try:
@@ -180,9 +183,10 @@ async def handle_message(message: types.Message):
                     )
                 )
             await status_msg.edit_text(
-                f"🔗 Есть ссылка на видео-файл\n\n"
+                f"{video_link}\n\n"
                 f"✅ Скачивание завершено ({format_size(file_size)})\n\n"
-                f"✅ Загрузка в чат завершена!"
+                f"✅ Загрузка в чат завершена!",
+                parse_mode="HTML"
             )
         except Exception as e:
             logger.error(f"Error sending video: {e}")

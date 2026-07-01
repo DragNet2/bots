@@ -85,6 +85,38 @@ get_lv_metrics() {
     fi
 }
 
+# Получает статистику по торрентам video_downloader
+get_torrent_metrics() {
+    TORRENT_DIR="/tmp/torrents"
+    
+    # Проверяем активные процессы aria2 и ffmpeg
+    TORRENT_PROCESSES=$(ps aux 2>/dev/null | grep -E 'aria2c|ffmpeg' | grep -v grep | wc -l || echo "0")
+    
+    # Количество папок загрузки
+    if [ -d "$TORRENT_DIR" ]; then
+        TORRENT_DOWNLOADS_COUNT=$(find "$TORRENT_DIR" -maxdepth 1 -type d -name 'downloads_*' 2>/dev/null | wc -l || echo "0")
+        TORRENT_DOWNLOADS_SIZE=$(du -sh "$TORRENT_DIR" 2>/dev/null | cut -f1 || echo "Error")
+        TORRENT_DOWNLOADS_SIZE_BYTES=$(du -sb "$TORRENT_DIR" 2>/dev/null | cut -f1 || echo "0")
+        
+        # Самая старая папка (для определения времени работы)
+        OLDEST_DIR=$(find "$TORRENT_DIR" -maxdepth 1 -type d -name 'downloads_*' -type d -exec stat -c '%Y %n' {} \; 2>/dev/null | sort -n | head -1 | awk '{print $2}')
+        if [ -n "$OLDEST_DIR" ] && [ -d "$OLDEST_DIR" ]; then
+            TORRENT_OLDEST_SECONDS=$(($(date +%s) - $(stat -c '%Y' "$OLDEST_DIR" 2>/dev/null || echo "0")))
+            TORRENT_OLDEST_TIME=$(printf '%02d:%02d:%02d' $((TORRENT_OLDEST_SECONDS/3600)) $(((TORRENT_OLDEST_SECONDS%3600)/60)) $((TORRENT_OLDEST_SECONDS%60)))
+        else
+            TORRENT_OLDEST_TIME="N/A"
+        fi
+    else
+        TORRENT_DOWNLOADS_COUNT="0"
+        TORRENT_DOWNLOADS_SIZE="Empty"
+        TORRENT_DOWNLOADS_SIZE_BYTES="0"
+        TORRENT_OLDEST_TIME="N/A"
+    fi
+    
+    # Проверяем папку с транскодированными файлами (если есть)
+    TRANSCODED_SIZE="N/A"
+}
+
 # Забирает метрики с MSK
 fetch_msk_metrics() {
     log "Fetching MSK metrics from $MSK_HOST..."
@@ -124,6 +156,11 @@ format_message() {
     local lv_db_bytes="${12}"
     local msk_repl_status="${13:-N/A}"  # LV → MSK replication status
     local lv_repl_status="${14:-N/A}"    # MSK → LV replication status
+    # Torrent stats
+    local torrent_procs="${15:-0}"
+    local torrent_count="${16:-0}"
+    local torrent_size="${17:-Empty}"
+    local torrent_time="${18:-N/A}"
 
     local timestamp=$(date '+%Y-%m-%d %H:%M')
 
@@ -140,6 +177,14 @@ format_message() {
     if [ "$lv_repl_status" = "ok" ]; then
         lv_repl_icon="✅"
         lv_repl_text="активна"
+    fi
+
+    # Иконки для торрентов
+    local torrent_icon="⏸️"
+    local torrent_text="нет активных"
+    if [ "$torrent_procs" -gt 0 ] 2>/dev/null; then
+        torrent_icon="⏬️"
+        torrent_text="идёт загрузка"
     fi
 
     local message="📊 <b>Мониторинг PostgreSQL</b>
@@ -159,7 +204,14 @@ format_message() {
 ├─ 📁 Бэкапы: <code>$lv_backups</code>
 ├─ 📋 Логи БД: <code>$lv_logs</code>
 ├─ 💿 Свободно: <code>$lv_disk</code>
-└─ 🔄 MSK→LV: <code>$lv_repl_icon $lv_repl_text</code>"
+└─ 🔄 MSK→LV: <code>$lv_repl_icon $lv_repl_text</code>
+
+📥 <b>Торренты</b> (video_downloader)
+├─ 🔄 Процессы: <code>$torrent_icon $torrent_procs шт</code>
+├─ 📁 Загрузок: <code>$torrent_count шт</code>
+├─ 💾 Размер: <code>$torrent_size</code>
+├─ ⏱ Работает: <code>$torrent_time</code>
+└─ 📋 Статус: <code>$torrent_text</code>"
 
     # Добавляем предупреждения
     if [ "$msk_db_bytes" -gt 15000000000 ] 2>/dev/null; then
@@ -221,6 +273,10 @@ main() {
     log "Collecting LV metrics..."
     get_lv_metrics
 
+    # Собираем метрики торрентов
+    log "Collecting torrent metrics..."
+    get_torrent_metrics
+
     # Забираем метрики с MSK
     if ! fetch_msk_metrics; then
         # Если не удалось получить метрики MSK - отправляем только LV
@@ -252,6 +308,7 @@ main() {
         "$MSK_DB_SIZE" "$MSK_USERS_COUNT" "$MSK_BACKUPS_SIZE" "$MSK_PG_LOGS_SIZE" "$MSK_DISK_FREE" "$MSK_DB_SIZE_BYTES" \
         "$LV_DB_SIZE" "$LV_USERS_COUNT" "$LV_BACKUPS_SIZE" "$LV_PG_LOGS_SIZE" "$LV_DISK_FREE" "$LV_DB_SIZE_BYTES" \
         "$MSK_REPL_STATUS" "$LV_REPLICATION_FROM_MSK" \
+        "$TORRENT_PROCESSES" "$TORRENT_DOWNLOADS_COUNT" "$TORRENT_DOWNLOADS_SIZE" "$TORRENT_OLDEST_TIME" \
     )
 
     send_telegram "$msg"

@@ -406,19 +406,38 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             parse_mode="HTML"
         )
 
+        # Get total size from torrent info
+        total_size = 0
+        try:
+            info_result = subprocess.run(
+                [aria2_path, "--show-files", torrent_arg],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if info_result.returncode == 0:
+                for line in info_result.stdout.split("\n"):
+                    if "Total Length:" in line:
+                        size_str = line.split("Total Length:")[1].strip()
+                        # Parse size like "1.4GiB (1,567,434,752)"
+                        import re
+                        match = re.search(r'\((\d+)\)', size_str)
+                        if match:
+                            total_size = int(match.group(1))
+        except Exception as e:
+            logger.error(f"Failed to get torrent size: {e}")
+
         # Start aria2c in background with magnet URI
         process = subprocess.Popen(
-            [aria2_path, "-d", download_dir, "--bt-stop-timeout=60", magnet_uri],
+            [aria2_path, "-d", download_dir, "--bt-stop-timeout=300", magnet_uri],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
 
-        # Wait a bit and check first progress
+        # Wait and check first progress
         await asyncio.sleep(5)
 
-        # Check if aria2 is running
         if process.poll() is not None:
-            # Process finished quickly - check for errors
             _, stderr = process.communicate()
             await bot.edit_message_text(
                 chat_id=chat_id,
@@ -428,15 +447,107 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             )
             return
 
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Торрент запущен!\n\n💾 Файлы в: <code>{download_dir}</code>\n\n⏱ Статус: загрузка активна",
-            parse_mode="HTML"
-        )
+        # Track progress
+        download_success = False
+        last_update = 0
 
-        # Note: torrent continues downloading in background
-        # To check status: aria2c --show-files <torrent_file>
+        while True:
+            if process.poll() is not None:
+                # Process finished
+                break
+
+            # Find downloaded file
+            downloaded = 0
+            try:
+                for f in os.listdir(download_dir):
+                    fpath = os.path.join(download_dir, f)
+                    if os.path.isfile(fpath):
+                        downloaded += os.path.getsize(fpath)
+            except:
+                pass
+
+            # Update message every 10 seconds
+            if asyncio.get_event_loop().time() - last_update > 10 or last_update == 0:
+                bar = progress_bar(downloaded, total_size) if total_size > 0 else "⏳"
+                size_str = f" ({format_size(downloaded)} / {format_size(total_size)})" if total_size > 0 else ""
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n⏬ Загрузка через aria2...\n{bar}{size_str}",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to edit message: {e}")
+                last_update = asyncio.get_event_loop().time()
+
+            await asyncio.sleep(5)
+
+        # Check result
+        _, stderr = process.communicate()
+
+        # Find final file
+        final_file = None
+        final_size = 0
+        try:
+            for f in os.listdir(download_dir):
+                fpath = os.path.join(download_dir, f)
+                if os.path.isfile(fpath):
+                    if final_file is None or os.path.getsize(fpath) > final_size:
+                        final_file = f
+                        final_size = os.path.getsize(fpath)
+        except:
+            pass
+
+        if final_file and final_size > 0 and (total_size == 0 or abs(final_size - total_size) < 1024*1024):
+            download_success = True
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n⏫ Загружаю в чат...",
+                    parse_mode="HTML"
+                )
+            except:
+                pass
+
+            # Send file to user
+            final_path = os.path.join(download_dir, final_file)
+            try:
+                with open(final_path, "rb") as f:
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=types.BufferedInputFile(f.read(), filename=final_file)
+                    )
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n✅ Отправлено!",
+                        parse_mode="HTML"
+                    )
+                except:
+                    pass
+            except Exception as e:
+                logger.error(f"Failed to send file: {e}")
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"❌ Ошибка отправки файла: {e}"
+                    )
+                except:
+                    pass
+        else:
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"❌ Загрузка не удалась.\n\n{stderr.decode()[:300] if stderr else ''}",
+                    parse_mode="HTML"
+                )
+            except:
+                pass
 
     except Exception as e:
         logger.error(f"Torrent error: {e}")

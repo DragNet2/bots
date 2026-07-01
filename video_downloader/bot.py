@@ -622,6 +622,12 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         logger.info(f"Torrent download loop finished. exit_code={aria2_exit_code}, final_file={final_file}, final_size={final_size}")
 
         if final_file and final_size > 0 and aria2_exit_code == 0 and (total_size == 0 or abs(final_size - total_size) < 1024*1024):
+            logger.info(f"Starting file processing: {final_file}, size={final_size}")
+            is_avi = final_file.lower().endswith(".avi")
+            is_mp4 = final_file.lower().endswith(".mp4")
+            is_streamable = any(final_file.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".flv"])
+            need_transcode = is_avi or final_size > 1.5 * 1024 * 1024 * 1024
+            logger.info(f"is_avi={is_avi}, is_streamable={is_streamable}, need_transcode={need_transcode}")
             download_success = True
             try:
                 await bot.edit_message_text(
@@ -639,10 +645,12 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             is_mp4 = final_file.lower().endswith(".mp4")
             is_streamable = any(final_file.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".flv"])
             need_transcode = is_avi or final_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB or AVI
+            logger.info(f"Final check: is_avi={is_avi}, is_streamable={is_streamable}, need_transcode={need_transcode}, final_size={final_size}")
 
             try:
                 if is_streamable and not need_transcode:
                     # Send as video - use file path for streaming
+                    logger.info("Sending as MP4 video...")
                     await bot.send_video(
                         chat_id=chat_id,
                         video=types.FSInputFile(final_path)

@@ -448,28 +448,47 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             return
 
         # Track progress
-        download_success = False
         last_update = 0
+        last_size = 0
+        stable_count = 0  # Count consecutive checks with same size (download complete)
+        max_wait = 600  # 10 minutes max
+        start_time = asyncio.get_event_loop().time()
 
         while True:
-            if process.poll() is not None:
-                # Process finished
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > max_wait:
+                logger.info(f"Torrent download timed out after {max_wait}s")
                 break
 
-            # Find downloaded file
-            downloaded = 0
+            # Find downloaded file and current size
+            current_size = 0
             try:
                 for f in os.listdir(download_dir):
                     fpath = os.path.join(download_dir, f)
                     if os.path.isfile(fpath):
-                        downloaded += os.path.getsize(fpath)
+                        current_size += os.path.getsize(fpath)
             except:
                 pass
 
+            # Check if process finished
+            if process.poll() is not None:
+                break
+
+            # Check if download is complete (size matches total and stable)
+            if total_size > 0 and current_size >= total_size:
+                if current_size == last_size:
+                    stable_count += 1
+                    if stable_count >= 3:  # 3 consecutive same sizes = complete
+                        break
+                else:
+                    stable_count = 0
+
+            last_size = current_size
+
             # Update message every 10 seconds
             if asyncio.get_event_loop().time() - last_update > 10 or last_update == 0:
-                bar = progress_bar(downloaded, total_size) if total_size > 0 else "⏳"
-                size_str = f" ({format_size(downloaded)} / {format_size(total_size)})" if total_size > 0 else ""
+                bar = progress_bar(current_size, total_size) if total_size > 0 else "⏳"
+                size_str = f" ({format_size(current_size)} / {format_size(total_size)})" if total_size > 0 else f" ({format_size(current_size)})"
                 try:
                     await bot.edit_message_text(
                         chat_id=chat_id,

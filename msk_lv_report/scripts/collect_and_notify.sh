@@ -228,7 +228,7 @@ format_message() {
 ├─ 💿 Свободно: <code>$lv_disk</code>
 └─ 🔄 MSK→LV: <code>$lv_repl_icon $lv_repl_text</code>
 
-📥 <b>Торренты</b> (video_downloader)
+📥 <b>Загрузки</b> (video_downloader)
 ├─ 🔄 Процессы: <code>$torrent_icon $torrent_procs шт</code>
 ├─ 📁 Загрузок: <code>$torrent_count шт</code>
 ├─ 💾 Размер: <code>$torrent_size</code>

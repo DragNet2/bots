@@ -545,14 +545,11 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             final_path = os.path.join(download_dir, final_file)
             is_video = any(final_file.lower().endswith(ext) for ext in [".avi", ".mp4", ".mkv", ".mov", ".webm", ".flv"])
             try:
-                with open(final_path, "rb") as f:
-                    file_data = f.read()
-                
                 if is_video and final_size < 2 * 1024 * 1024 * 1024:  # < 2GB
-                    # Send as video
+                    # Send as video - use file path for streaming
                     await bot.send_video(
                         chat_id=chat_id,
-                        video=types.BufferedInputFile(file_data, filename=final_file)
+                        video=types.FSInputFile(final_path)
                     )
                 elif is_video and final_size >= 2 * 1024 * 1024 * 1024:
                     # Too large even for video
@@ -564,10 +561,10 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     )
                     return
                 else:
-                    # Send as document
+                    # Send as document - use file path for streaming
                     await bot.send_document(
                         chat_id=chat_id,
-                        document=types.BufferedInputFile(file_data, filename=final_file)
+                        document=types.FSInputFile(final_path)
                     )
                 
                 try:

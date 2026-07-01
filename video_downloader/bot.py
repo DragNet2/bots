@@ -351,6 +351,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
     task_id = str(uuid.uuid4())[:8]
     torrent_path = f"{TORRENT_DIR}/torrent_{task_id}.torrent"
     download_dir = f"{TORRENT_DIR}/downloads_{task_id}"
+    total_size = 0
     os.makedirs(download_dir, exist_ok=True)
 
     try:
@@ -481,7 +482,6 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         )
 
         # Get total size from torrent info
-        total_size = 0
         try:
             info_result = subprocess.run(
                 [aria2_path, "--show-files", torrent_arg],

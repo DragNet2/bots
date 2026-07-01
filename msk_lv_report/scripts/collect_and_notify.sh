@@ -92,7 +92,7 @@ get_torrent_metrics() {
     # Проверяем активные процессы aria2 и ffmpeg
     TORRENT_PROCESSES=$(ps aux 2>/dev/null | grep -E 'aria2c|ffmpeg' | grep -v grep | wc -l || echo "0")
     
-    # Количество папок загрузки
+    # Основная папка с загрузками
     if [ -d "$TORRENT_DIR" ]; then
         TORRENT_DOWNLOADS_COUNT=$(find "$TORRENT_DIR" -maxdepth 1 -type d -name 'downloads_*' 2>/dev/null | wc -l || echo "0")
         TORRENT_DOWNLOADS_SIZE=$(du -sh "$TORRENT_DIR" 2>/dev/null | cut -f1 || echo "Error")
@@ -106,15 +106,32 @@ get_torrent_metrics() {
         else
             TORRENT_OLDEST_TIME="N/A"
         fi
+        
+        #orphaned .transcoded.mp4 файлы (не удалены после отправки)
+        TRANSCODED_COUNT=$(find "$TORRENT_DIR" -name '*.transcoded.mp4' 2>/dev/null | wc -l || echo "0")
+        TRANSCODED_SIZE=$(du -sh "$TORRENT_DIR"/*.transcoded.mp4 2>/dev/null | cut -f1 || echo "0")
+        if [ "$TRANSCODED_COUNT" = "0" ]; then
+            TRANSCODED_SIZE="-"
+        fi
+        
+        #orphaned .torrent файлы
+        TORRENT_FILES_COUNT=$(find "$TORRENT_DIR" -maxdepth 1 -name 'torrent_*.torrent' 2>/dev/null | wc -l || echo "0")
     else
         TORRENT_DOWNLOADS_COUNT="0"
         TORRENT_DOWNLOADS_SIZE="Empty"
         TORRENT_DOWNLOADS_SIZE_BYTES="0"
         TORRENT_OLDEST_TIME="N/A"
+        TRANSCODED_COUNT="0"
+        TRANSCODED_SIZE="-"
+        TORRENT_FILES_COUNT="0"
     fi
     
-    # Проверяем папку с транскодированными файлами (если есть)
-    TRANSCODED_SIZE="N/A"
+    # Временные файлы VK видео
+    VK_TEMP_COUNT=$(find /tmp -maxdepth 1 -name 'vk_video_*.mp4' 2>/dev/null | wc -l || echo "0")
+    VK_TEMP_SIZE=$(du -sh /tmp/vk_video_*.mp4 2>/dev/null | cut -f1 || echo "-")
+    if [ "$VK_TEMP_COUNT" = "0" ]; then
+        VK_TEMP_SIZE="-"
+    fi
 }
 
 # Забирает метрики с MSK
@@ -161,6 +178,11 @@ format_message() {
     local torrent_count="${16:-0}"
     local torrent_size="${17:-Empty}"
     local torrent_time="${18:-N/A}"
+    local transcoded_count="${19:-0}"
+    local transcoded_size="${20:--}"
+    local torrent_files="${21:-0}"
+    local vk_temp_count="${22:-0}"
+    local vk_temp_size="${23:--}"
 
     local timestamp=$(date '+%Y-%m-%d %H:%M')
 
@@ -211,7 +233,11 @@ format_message() {
 ├─ 📁 Загрузок: <code>$torrent_count шт</code>
 ├─ 💾 Размер: <code>$torrent_size</code>
 ├─ ⏱ Работает: <code>$torrent_time</code>
-└─ 📋 Статус: <code>$torrent_text</code>"
+├─ 📋 Статус: <code>$torrent_text</code>
+│
+├─ 🎬 Transcoded: <code>$transcoded_count шт ($transcoded_size)</code>
+├─ 📦 .torrent файлы: <code>$torrent_files шт</code>
+└─ 🎥 VK temp: <code>$vk_temp_count шт ($vk_temp_size)</code>"
 
     # Добавляем предупреждения
     if [ "$msk_db_bytes" -gt 15000000000 ] 2>/dev/null; then
@@ -309,6 +335,7 @@ main() {
         "$LV_DB_SIZE" "$LV_USERS_COUNT" "$LV_BACKUPS_SIZE" "$LV_PG_LOGS_SIZE" "$LV_DISK_FREE" "$LV_DB_SIZE_BYTES" \
         "$MSK_REPL_STATUS" "$LV_REPLICATION_FROM_MSK" \
         "$TORRENT_PROCESSES" "$TORRENT_DOWNLOADS_COUNT" "$TORRENT_DOWNLOADS_SIZE" "$TORRENT_OLDEST_TIME" \
+        "$TRANSCODED_COUNT" "$TRANSCODED_SIZE" "$TORRENT_FILES_COUNT" "$VK_TEMP_COUNT" "$VK_TEMP_SIZE" \
     )
 
     send_telegram "$msg"

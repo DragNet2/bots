@@ -1,6 +1,7 @@
-import httpx
+import asyncio
 import os
 import re
+import subprocess
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,6 +16,7 @@ class VKClient:
 
     async def get_video(self, owner_id: str, video_id: str) -> dict | None:
         """Get video info from VK."""
+        import httpx
         async with httpx.AsyncClient() as client:
             params = {
                 "access_token": self.token,
@@ -47,71 +49,33 @@ class VKClient:
 
         return None
 
-    async def get_vkvideo_url(self, url: str) -> str | None:
-        """Get direct video URL from vkvideo.ru page."""
-        # vkvideo.ru is a separate video hosting, need to scrape the page
-        match = re.search(r"video(-?\d+)_(\d+)", url)
-        if not match:
-            return None
-
-        video_id = match.group(2)
-
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-                html = response.text
-
-                # Look for mp4 URL in the page
-                # Pattern: src="https://vk.com/video...mp4..."
-                mp4_pattern = r'(?:src|data-src)=["\']([^"\']*\.mp4[^"\']*)["\']'
-                matches = re.findall(mp4_pattern, html)
-
-                for mp4_url in matches:
-                    if "vk.com/video" in mp4_url or mp4_url.startswith("http"):
-                        return mp4_url
-
-                # Alternative: look for player config
-                player_pattern = r'"url720"\s*:\s*["\']([^"\']+)["\']'
-                match = re.search(player_pattern, html)
-                if match:
-                    return match.group(1)
-
-                player_pattern = r'"url480"\s*:\s*["\']([^"\']+)["\']'
-                match = re.search(player_pattern, html)
-                if match:
-                    return match.group(1)
-
-                player_pattern = r'"url360"\s*:\s*["\']([^"\']+)["\']'
-                match = re.search(player_pattern, html)
-                if match:
-                    return match.group(1)
-
-            except Exception as e:
-                print(f"Error fetching vkvideo.ru page: {e}")
-
-        return None
-
     async def get_video_url(self, url: str) -> str | None:
-        """Get direct video URL from VK video page."""
-        # For vkvideo.ru, scrape the page directly
-        if "vkvideo.ru" in url.lower():
-            return await self.get_vkvideo_url(url)
-
-        ids = self.extract_video_id(url)
-        if not ids:
-            return None
-
-        owner_id, video_id = ids
-        video = await self.get_video(owner_id, video_id)
-
-        if not video:
-            return None
-
-        # Prefer mp4 files with highest quality
-        files = video.get("files", {})
-        for key in ["mp4_1080", "mp4_720", "mp4_480", "mp4_360", "mp4_240"]:
-            if key in files:
-                return files[key]
+        """Get direct video URL from VK video page using yt-dlp."""
+        # Use yt-dlp to get direct URL
+        try:
+            result = subprocess.run(
+                ["yt-dlp", "--get-url", "-f", "best[ext=mp4]/best", url],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception as e:
+            print(f"yt-dlp error: {e}")
 
         return None
+
+    async def download_video(self, url: str, output_path: str) -> bool:
+        """Download video using yt-dlp."""
+        try:
+            result = subprocess.run(
+                ["yt-dlp", "-f", "best[ext=mp4]/best", "-o", output_path, url],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            print(f"yt-dlp download error: {e}")
+            return False

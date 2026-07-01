@@ -416,14 +416,25 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 timeout=30,
             )
             if info_result.returncode == 0:
-                for line in info_result.stdout.split("\n"):
+                output = info_result.stdout
+                logger.info(f"aria2 --show-files output: {output[:500]}")
+                for line in output.split("\n"):
                     if "Total Length:" in line:
                         size_str = line.split("Total Length:")[1].strip()
-                        # Parse size like "1.4GiB (1,567,434,752)"
+                        # Format: "1.4GiB (1,567,434,752)" or "1,567,434,752"
                         import re
-                        match = re.search(r'\((\d+)\)', size_str)
+                        match = re.search(r'[\d,]+', size_str.replace(",", ""))
                         if match:
-                            total_size = int(match.group(1))
+                            total_size = int(match.group().replace(",", ""))
+                        elif "GiB" in size_str:
+                            match = re.search(r'([\d.]+)GiB', size_str)
+                            if match:
+                                total_size = int(float(match.group(1)) * 1024 * 1024 * 1024)
+                        elif "MiB" in size_str:
+                            match = re.search(r'([\d.]+)MiB', size_str)
+                            if match:
+                                total_size = int(float(match.group(1)) * 1024 * 1024)
+                        logger.info(f"Parsed total_size: {total_size}")
         except Exception as e:
             logger.error(f"Failed to get torrent size: {e}")
 
@@ -532,12 +543,33 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
             # Send file to user
             final_path = os.path.join(download_dir, final_file)
+            is_video = any(final_file.lower().endswith(ext) for ext in [".avi", ".mp4", ".mkv", ".mov", ".webm", ".flv"])
             try:
                 with open(final_path, "rb") as f:
+                    file_data = f.read()
+                
+                if is_video and final_size < 2 * 1024 * 1024 * 1024:  # < 2GB
+                    # Send as video
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=types.BufferedInputFile(file_data, filename=final_file)
+                    )
+                elif is_video and final_size >= 2 * 1024 * 1024 * 1024:
+                    # Too large even for video
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"⚠️ Файл слишком большой для отправки в Telegram ({format_size(final_size)}).\n\nФайл сохранён на сервере.",
+                        parse_mode="HTML"
+                    )
+                    return
+                else:
+                    # Send as document
                     await bot.send_document(
                         chat_id=chat_id,
-                        document=types.BufferedInputFile(f.read(), filename=final_file)
+                        document=types.BufferedInputFile(file_data, filename=final_file)
                     )
+                
                 try:
                     await bot.edit_message_text(
                         chat_id=chat_id,

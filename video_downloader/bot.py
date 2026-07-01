@@ -50,7 +50,7 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
     yt_dlp_path = f"{venv_bin}/yt-dlp"
 
     process = subprocess.Popen(
-        [yt_dlp_path, "-f", "best[ext=mp4]/best", "-o", output_path, url],
+        [yt_dlp_path, "-c", "-f", "best[ext=mp4]/best", "-o", output_path, url],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -129,6 +129,7 @@ async def handle_message(message: types.Message):
 
     temp_path = "/tmp/vk_video.mp4"
     video_url = None
+    download_success = False
 
     try:
         # Get video URL first
@@ -157,8 +158,15 @@ async def handle_message(message: types.Message):
         success = await download_with_progress(text, temp_path, on_progress)
 
         if not success:
-            await status_msg.edit_text("❌ Не удалось скачать видео. Проверьте ссылку.")
+            await status_msg.edit_text(
+                f"{video_link}\n\n"
+                f"❌ Скачивание прервано. Повторите команду с той же ссылкой для докачки.\n\n"
+                f"(Файл сохранён для возобновления)",
+                parse_mode="HTML"
+            )
             return
+
+        download_success = True
 
         # Check file exists
         if not os.path.exists(temp_path):
@@ -200,7 +208,8 @@ async def handle_message(message: types.Message):
             await message.answer(f"❌ Ошибка: {e}")
 
     finally:
-        if os.path.exists(temp_path):
+        # Only delete file if download was successful (sent to user)
+        if download_success and os.path.exists(temp_path):
             os.remove(temp_path)
 
 

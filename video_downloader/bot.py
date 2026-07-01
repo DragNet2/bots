@@ -93,19 +93,35 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
     return return_code == 0
 
 
-async def process_download(message: types.Message, url: str):
+async def process_download(chat_id: int, message_id: int, url: str):
     """Process a single video download."""
-    global is_downloading
+    global is_downloading, bot
 
     download_success = False
     task_id = str(uuid.uuid4())[:8]
     temp_path = f"/tmp/vk_video_{task_id}.mp4"
 
+    status_message = None
     try:
+        # Get the status message to edit
+        try:
+            status_message = await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text="⏳ Начинаю скачивание..."
+            )
+        except Exception as e:
+            logger.error(f"Could not edit message: {e}")
+            # Message might be too old to edit, continue anyway
+
         video_info = await vk.get_video_info(url)
 
         if not video_info or not video_info.get("url"):
-            await message.answer("❌ Не удалось получить информацию о видео. Проверьте ссылку.")
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text="❌ Не удалось получить информацию о видео. Проверьте ссылку."
+            )
             return
 
         video_title = video_info.get("title", "Без названия")
@@ -117,66 +133,83 @@ async def process_download(message: types.Message, url: str):
             size_str = ""
             if total_bytes > 0:
                 size_str = f" ({format_size(current_bytes)} / {format_size(total_bytes)})"
-            await message.edit_text(
-                f"{escape(video_title)}\n\n"
-                f"{video_link}\n\n"
-                f"⏬ Скачивание...\n"
-                f"{bar}{size_str}",
-                parse_mode="HTML"
-            )
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n⏬ Скачивание...\n{bar}{size_str}",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
 
         success = await download_with_progress(url, temp_path, on_progress)
 
         if not success:
-            await message.edit_text(
-                f"{escape(video_title)}\n\n"
-                f"{video_link}\n\n"
-                f"❌ Скачивание прервано. Повторите команду с той же ссылкой для докачки.\n\n"
-                f"(Файл сохранён для возобновления)",
-                parse_mode="HTML"
-            )
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n❌ Скачивание прервано. Повторите команду с той же ссылкой для докачки.\n\n(Файл сохранён для возобновления)",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
             return
 
         download_success = True
 
         if not os.path.exists(temp_path):
-            await message.edit_text("❌ Файл не был создан.")
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="❌ Файл не был создан."
+                )
+            except Exception:
+                pass
             return
 
         file_size = os.path.getsize(temp_path)
 
-        await message.edit_text(
-            f"{escape(video_title)}\n\n"
-            f"{video_link}\n\n"
-            f"✅ Скачивание завершено ({format_size(file_size)})\n\n"
-            f"⏫ Загружаю в чат...",
-            parse_mode="HTML"
-        )
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n⏫ Загружаю в чат...",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
 
         try:
             with open(temp_path, "rb") as video_file:
-                await message.answer_video(
-                    video=types.BufferedInputFile(
-                        video_file.read(), filename="video.mp4"
-                    )
+                await bot.send_video(
+                    chat_id=chat_id,
+                    video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
                 )
-            await message.edit_text(
-                f"{escape(video_title)}\n\n"
-                f"{video_link}\n\n"
-                f"✅ Скачивание завершено ({format_size(file_size)})\n\n"
-                f"✅ Загрузка в чат завершена!",
-                parse_mode="HTML"
-            )
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n✅ Загрузка в чат завершена!",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error sending video: {e}")
-            await message.edit_text(f"❌ Ошибка при отправке видео: {e}")
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"❌ Ошибка при отправке видео: {e}"
+                )
+            except Exception:
+                pass
 
     except Exception as e:
         logger.error(f"Error: {e}")
-        try:
-            await message.edit_text(f"❌ Ошибка: {e}")
-        except:
-            await message.answer(f"❌ Ошибка: {e}")
 
     finally:
         if download_success and os.path.exists(temp_path):
@@ -192,13 +225,12 @@ async def queue_worker():
     while True:
         try:
             # Wait for next item in queue
-            message, url = await download_queue.get()
+            chat_id, message_id, url = await download_queue.get()
 
             is_downloading = True
 
             try:
-                await message.edit_text("⏳ Начинаю скачивание...")
-                await process_download(message, url)
+                await process_download(chat_id, message_id, url)
             finally:
                 download_queue.task_done()
 
@@ -265,15 +297,16 @@ async def handle_message(message: types.Message):
     if queue_task is None or queue_task.done():
         queue_task = asyncio.create_task(queue_worker())
 
-    # Add to queue
-    await download_queue.put((message, text))
+    # Send initial message and get its ID
+    status_msg = await message.answer("⏳ Видео в очереди на скачивание...")
+
+    # Add to queue: (chat_id, message_id, url)
+    await download_queue.put((message.chat.id, status_msg.message_id, text))
 
     queue_size = download_queue.qsize()
 
-    if queue_size == 1:
-        await message.answer("⏳ Видео в очереди на скачивание...")
-    else:
-        await message.answer(f"📋 Видео добавлено в очередь. Позиция: {queue_size}")
+    if queue_size > 1:
+        await status_msg.edit_text(f"📋 Видео добавлено в очередь. Позиция: {queue_size}")
 
 
 async def main():

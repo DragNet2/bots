@@ -312,39 +312,10 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             # Build the download URL
             download_url = f"https://rutracker.org/forum/dl.php?t={topic_id}"
 
-            # Try with cookies file first
-            cookies_arg = []
-            if os.path.exists(COOKIES_FILE):
-                cookies_arg = ["--cookies", COOKIES_FILE]
-            else:
-                # Try chrome cookies via python
-                chrome_cookies = os.path.expanduser("~/.config/google-chrome/Default/Cookies")
-                if os.path.exists(chrome_cookies):
-                    try:
-                        import sqlite3
-                        conn = sqlite3.connect(chrome_cookies)
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            "SELECT host, name, value, path FROM cookies WHERE host LIKE '%rutracker%'"
-                        )
-                        cookies_data = cursor.fetchall()
-                        conn.close()
-
-                        if cookies_data:
-                            with open(COOKIES_FILE, "w") as f:
-                                f.write("# Netscape HTTP Cookie File\n")
-                                for host, name, value, path in cookies_data:
-                                    f.write(f"{host}\tTRUE\t{path}\tFALSE\t0\t{name}\t{value}\n")
-                            cookies_arg = ["--cookies", COOKIES_FILE]
-                    except Exception as e:
-                        logger.error(f"Chrome cookies error: {e}")
-
             # Use curl to download the .torrent file
             curl_cmd = ["curl", "-s", "-L", "-o", torrent_path]
-            if cookies_arg:
-                curl_cmd.extend(cookies_arg)
-            else:
-                curl_cmd.extend(["-b", COOKIES_FILE] if os.path.exists(COOKIES_FILE) else [])
+            if os.path.exists(COOKIES_FILE):
+                curl_cmd.extend(["--cookie", COOKIES_FILE])
             curl_cmd.append(download_url)
 
             result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=60)

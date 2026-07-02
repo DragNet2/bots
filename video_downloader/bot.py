@@ -170,9 +170,31 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
 async def get_video_info_from_url(url: str):
     """Extract video info from various video hosting sites."""
     import re
-    import asyncio
+    import subprocess
+    import aiohttp
 
     url_lower = url.lower()
+
+    # Pornhub
+    if 'pornhub.com' in url_lower or 'rt.pornhub.com' in url_lower:
+        try:
+            result = subprocess.run(
+                ["/home/bots/video_downloader/venv/bin/yt-dlp",
+                 "--get-title", "--get-url",
+                 "--no-warnings", "-J", url],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0:
+                import json
+                data = json.loads(result.stdout)
+                video_url = data.get("url") or data.get("entries", [{}])[0].get("url", "")
+                title = data.get("title", "Video")
+                if video_url:
+                    return {"url": video_url, "title": title}
+        except Exception as e:
+            logger.error(f"Pornhub extraction failed: {e}")
 
     # VK video (various domains with VK video IDs)
     vk_pattern = r'vk\.com|vk\.io|vk\.ru|userapi\.com|mp4upload\.com'
@@ -1264,7 +1286,7 @@ async def handle_message(message: types.Message):
         "vk.com", "vkvideo.ru", "vk.ru",
         "ukdevilz.com", "noodlemagazine.com",
         "sex.spreee.name", "36ebalka.ru",
-        "embed-player.space"
+        "embed-player.space", "pornhub.com"
     ])
     if not is_video_url and not is_torrent_url(text):
         await message.answer("Отправьте ссылку на видео из ВКонтакте или торрент.")

@@ -160,6 +160,100 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
     return return_code == 0
 
 
+async def get_video_info_from_url(url: str):
+    """Extract video info from various video hosting sites."""
+    import re
+    import asyncio
+
+    url_lower = url.lower()
+
+    # VK video (various domains with VK video IDs)
+    vk_pattern = r'vk\.com|vk\.io|userapi\.com|mp4upload\.com|(-?\d+_\d+)'
+    if re.search(vk_pattern, url_lower) or 'w0w.ukdevilz.com' in url_lower or 'hot.noodlemagazine.com' in url_lower:
+        return await vk.get_video_info(url)
+
+    # sex.spreee.name - uses embed-player.space CDN
+    if 'sex.spreee.name' in url_lower or 'embed-player.space' in url_lower:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["curl", "-s", "-L", "-A", "Mozilla/5.0", url],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            html = result.stdout
+
+            # Try to find video URL in various formats
+            patterns = [
+                r'["\'](https?://[^"\']+\.mp4[^"\']*)["\']',
+                r'src=["\']([^"\']+)["\']\s*type=["\']video',
+                r'"file"\s*:\s*["\']([^"\']+)["\']',
+                r'"src"\s*:\s*["\']([^"\']+\.mp4[^"\']*)["\']',
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, html, re.IGNORECASE)
+                if match:
+                    video_url = match.group(1).replace("\\", "")
+                    # Extract title
+                    title_match = re.search(r'<title>([^<]+)</title>', html)
+                    title = title_match.group(1).strip() if title_match else "Video"
+                    return {"url": video_url, "title": title}
+
+            # Try iframe src
+            iframe_match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', html)
+            if iframe_match:
+                iframe_url = iframe_match.group(1)
+                return await get_video_info_from_url(iframe_url)
+
+        except Exception as e:
+            logger.error(f"Failed to extract from sex.spreee.name: {e}")
+
+    # 36ebalka.ru.actor and similar sites
+    if '36ebalka.ru' in url_lower or 'noodlemagazine.com' in url_lower or 'ukdevilz.com' in url_lower:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["curl", "-s", "-L", "-A", "Mozilla/5.0", url],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            html = result.stdout
+
+            # Look for video player sources
+            patterns = [
+                r'<video[^>]+src=["\']([^"\']+)["\']',
+                r'"file"\s*:\s*["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
+                r'"src"\s*:\s*["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
+                r'url:\s*["\']([^"\']+)["\']',
+                r'<source[^>]+src=["\']([^"\']+)["\']',
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, html, re.IGNORECASE)
+                if match:
+                    video_url = match.group(1).replace("\\", "")
+                    title_match = re.search(r'<title>([^<]+)</title>', html)
+                    title = title_match.group(1).strip() if title_match else "Video"
+                    return {"url": video_url, "title": title}
+
+            # Check for player config JSON
+            config_match = re.search(r'player\.conf\s*=\s*(\{[^;]+\})', html)
+            if config_match:
+                import json
+                try:
+                    config = json.loads(config_match.group(1))
+                    if "file" in config:
+                        return {"url": config["file"], "title": config.get("title", "Video")}
+                except:
+                    pass
+
+        except Exception as e:
+            logger.error(f"Failed to extract from video site: {e}")
+
+    return None
+
+
 async def process_video_download(chat_id: int, message_id: int, url: str):
     """Process a single video download."""
     global is_downloading, bot
@@ -178,7 +272,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         except Exception as e:
             logger.error(f"Could not edit message: {e}")
 
-        video_info = await vk.get_video_info(url)
+        video_info = await get_video_info_from_url(url)
 
         if not video_info or not video_info.get("url"):
             await bot.edit_message_text(

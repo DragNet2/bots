@@ -19,11 +19,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-vk_client = VKClient(os.getenv("VK_TOKEN", ""))
+vk = VKClient()
 yandex = YandexDisk(os.getenv("YANDEX_TOKEN", "")) if os.getenv("YANDEX_TOKEN") else None
 YADISK_FOLDER = os.getenv("YADISK_FOLDER", "/TG_bot - Скачуля")
 dp = Dispatcher()
-vk = VKClient()
 
 # Video download queue
 video_queue = asyncio.Queue()

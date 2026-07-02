@@ -251,14 +251,11 @@ async def get_video_info_from_url(url: str):
             )
             html = result.stdout
 
-            # Look for video player sources
+            # Look for video player sources - prioritize direct .mp4 files
             patterns = [
-                r'<meta\s+property="og:video"\s+content="([^"]+)"',
-                r'<video[^>]+src=["\']([^"\']+)["\']',
-                r'"file"\s*:\s*["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
-                r'"src"\s*:\s*["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
-                r'url:\s*["\']([^"\']+)["\']',
-                r'<source[^>]+src=["\']([^"\']+)["\']',
+                r'https://[^"\']+36ebalka\.ru[^"\']+\.mp4[^"\']*',  # Direct mp4 from 36ebalka
+                r'https://[^"\']+get_file[^"\']+\.mp4[^"\']*',  # get_file mp4
+                r'<meta\s+property="og:video"\s+content="([^"]+)"',  # og:video (fallback)
             ]
             for pattern in patterns:
                 match = re.search(pattern, html, re.IGNORECASE)

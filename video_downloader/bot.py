@@ -491,6 +491,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
 
 async def upload_worker():
     """Background worker that handles Yandex Disk uploads in parallel with downloads."""
+    last_message_text = {}
+
     while True:
         try:
             # Wait for upload task
@@ -498,21 +500,30 @@ async def upload_worker():
 
             chat_id, message_id, video_title, video_link, file_path, send_file_name = task_data
 
+            # Track last message to avoid duplicate edits
+            msg_key = f"{chat_id}:{message_id}"
+            last_message_text[msg_key] = None
+
             try:
                 disk_path = f"{YADISK_FOLDER}/{send_file_name}"
 
                 async def upload_progress(loaded, total):
                     percent = min(100, (loaded / total) * 100) if total > 0 else 0
                     bar = progress_bar(percent, 100)
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск...\n{bar}",
-                            parse_mode="HTML"
-                        )
-                    except:
-                        pass
+                    msg_text = f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск...\n{bar}"
+
+                    # Only update if message changed
+                    if last_message_text.get(msg_key) != msg_text:
+                        try:
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                text=msg_text,
+                                parse_mode="HTML"
+                            )
+                            last_message_text[msg_key] = msg_text
+                        except Exception:
+                            pass
 
                 await bot.edit_message_text(
                     chat_id=chat_id,
@@ -520,6 +531,7 @@ async def upload_worker():
                     text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск...",
                     parse_mode="HTML"
                 )
+                last_message_text[msg_key] = None  # Reset after edit
 
                 success = await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress)
 

@@ -175,24 +175,56 @@ async def get_video_info_from_url(url: str):
 
     url_lower = url.lower()
 
-    # Pornhub
+    # Pornhub - extract directly from HTML with proper headers
     if 'pornhub.com' in url_lower or 'rt.pornhub.com' in url_lower:
         try:
+            import subprocess
             result = subprocess.run(
-                ["/home/bots/video_downloader/venv/bin/yt-dlp",
-                 "--get-title", "--get-url",
-                 "--no-warnings", "-J", url],
+                [
+                    "curl", "-s", "--socks5", "127.0.0.1:1080",
+                    "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    url
+                ],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
             )
-            if result.returncode == 0:
-                import json
-                data = json.loads(result.stdout)
-                video_url = data.get("url") or data.get("entries", [{}])[0].get("url", "")
-                title = data.get("title", "Video")
-                if video_url:
-                    return {"url": video_url, "title": title}
+            html = result.stdout
+
+            # Extract video title
+            title_match = re.search(r'<title>([^<]+)</title>', html)
+            title = title_match.group(1).replace(" - Pornhub.com", "").strip() if title_match else "Video"
+
+            # Find video quality URLs - prioritize higher quality
+            patterns = [
+                r'"quality_720p"\s*:\s*"(https://[^"]+\.mp4[^"]*)"',
+                r'"quality_480p"\s*:\s*"(https://[^"]+\.mp4[^"]*)"',
+                r'"quality_240p"\s*:\s*"(https://[^"]+\.mp4[^"]*)"',
+                r'"defaultQuality"\s*:\s*\[(.*?)\]',
+                r'media_0\s*=(.*?);',
+            ]
+
+            video_url = None
+            for pattern in patterns:
+                match = re.search(pattern, html, re.DOTALL)
+                if match:
+                    # Try to extract URL from the match
+                    url_match = re.search(r'https://[^"\']+\.mp4[^"\']*', match.group(0))
+                    if url_match:
+                        video_url = url_match.group(0)
+                        break
+
+            # Alternative: find any mp4 URL
+            if not video_url:
+                mp4_match = re.search(r'https://[^"\']+\.mp4[^"\']*', html)
+                if mp4_match:
+                    video_url = mp4_match.group(0)
+
+            if video_url:
+                # Remove quality params from URL if present
+                video_url = re.sub(r'&quality=\d+', '', video_url)
+                return {"url": video_url, "title": title}
+
         except Exception as e:
             logger.error(f"Pornhub extraction failed: {e}")
 

@@ -36,16 +36,31 @@ class VKClient:
         # https://vk.com/video-123456789_123456789
         # https://vk.com/video123456789_123456789
         # https://vkvideo.ru/video-123456789_123456789
+        # https://w0w.ukdevilz.com/watch/-123456789_123456789
+        # https://hot.noodlemagazine.com/watch/-123456789_123456789
 
         patterns = [
             r"video(-?\d+)_(\d+)",
             r"video\.php\?oid=(-?\d+)&id=(\d+)",
+            r"/watch/(-?\d+_\d+)",
+            r"(-?\d+_\d+)$",  # Direct ID at end of URL
         ]
 
         for pattern in patterns:
             match = re.search(pattern, url)
             if match:
-                return match.group(1), match.group(2)
+                if pattern == r"(-?\d+_\d+)$":
+                    # Direct ID format
+                    parts = match.group(1).split("_")
+                    return parts[0], parts[1]
+                elif pattern == r"/watch/(-?\d+_\d+)":
+                    # ukdevilz/noodlemagazine format
+                    parts = match.group(1).split("_")
+                    return parts[0], parts[1]
+                elif "video.php" in pattern:
+                    return match.group(1), match.group(2)
+                else:
+                    return match.group(1), match.group(2)
 
         return None
 

@@ -372,21 +372,70 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         except Exception:
             pass
 
+        # Check if video needs transcoding (>50MB for direct send)
+        need_transcode = file_size > 50 * 1024 * 1024  # > 50MB
+
         try:
-            with open(temp_path, "rb") as video_file:
-                await bot.send_video(
-                    chat_id=chat_id,
-                    video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
-                )
-            try:
+            if need_transcode:
+                # Transcode to smaller size
+                transcoded_path = temp_path + ".transcoded.mp4"
+
+                async def transcode_progress(percent, total):
+                    bar = progress_bar(percent, 100)
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование...\n{bar}",
+                            parse_mode="HTML"
+                        )
+                    except:
+                        pass
+
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n✅ Загрузка в чат завершена!",
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование видео...",
                     parse_mode="HTML"
                 )
-            except Exception:
-                pass
+
+                success = await transcode_video(temp_path, transcoded_path, max_size_mb=1800, progress_callback=transcode_progress)
+
+                if success and os.path.exists(transcoded_path):
+                    transcoded_size = os.path.getsize(transcoded_path)
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Перекодирование завершено ({format_size(transcoded_size)})\n\n⏫ Загружаю в чат...",
+                        parse_mode="HTML"
+                    )
+                    with open(transcoded_path, "rb") as video_file:
+                        await bot.send_video(
+                            chat_id=chat_id,
+                            video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
+                        )
+                    os.remove(transcoded_path)
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загрузка в чат завершена!",
+                        parse_mode="HTML"
+                    )
+                else:
+                    raise Exception("Transcoding failed")
+            else:
+                # Send directly
+                with open(temp_path, "rb") as video_file:
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
+                    )
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загрузка в чат завершена!",
+                    parse_mode="HTML"
+                )
         except Exception as e:
             logger.error(f"Error sending video: {e}")
             try:

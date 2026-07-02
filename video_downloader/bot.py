@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 vk_client = VKClient(os.getenv("VK_TOKEN", ""))
 yandex = YandexDisk(os.getenv("YANDEX_TOKEN", "")) if os.getenv("YANDEX_TOKEN") else None
+YADISK_FOLDER = os.getenv("YADISK_FOLDER", "/TG_bot - Скачуля")
 dp = Dispatcher()
 vk = VKClient()
 
@@ -377,6 +378,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
 
         # Check if video needs transcoding (>1.5GB)
         need_transcode = file_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB
+        file_to_send = temp_path
 
         try:
             if need_transcode:
@@ -405,30 +407,52 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 success = await transcode_video(temp_path, transcoded_path, max_size_mb=1800, progress_callback=transcode_progress)
 
                 if success and os.path.exists(transcoded_path):
-                    transcoded_size = os.path.getsize(transcoded_path)
+                    file_to_send = transcoded_path
+                else:
+                    raise Exception("Transcoding failed")
+
+            # Upload to Yandex Disk
+            if yandex:
+                # Create folder if needed
+                await yandex.create_folder(YADISK_FOLDER)
+
+                # Get filename
+                send_file_name = os.path.basename(file_to_send)
+                if video_title:
+                    # Clean filename from special chars
+                    clean_title = re.sub(r'[^\w\s\-\.]', '_', video_title)[:100]
+                    ext = os.path.splitext(send_file_name)[1]
+                    send_file_name = f"{clean_title}{ext}"
+
+                disk_path = f"{YADISK_FOLDER}/{send_file_name}"
+
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск...",
+                    parse_mode="HTML"
+                )
+
+                upload_success = await yandex.upload_file(file_to_send, disk_path)
+
+                if upload_success:
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
-                        text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Перекодирование завершено ({format_size(transcoded_size)})\n\n⏫ Загружаю в чат...",
-                        parse_mode="HTML"
-                    )
-                    with open(transcoded_path, "rb") as video_file:
-                        await bot.send_video(
-                            chat_id=chat_id,
-                            video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
-                        )
-                    os.remove(transcoded_path)
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загрузка в чат завершена!",
+                        text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загружено на Яндекс.Диск!\n📁 {YADISK_FOLDER}/{send_file_name}",
                         parse_mode="HTML"
                     )
                 else:
-                    raise Exception("Transcoding failed")
+                    raise Exception("Yandex Disk upload failed")
             else:
-                # Send directly
-                with open(temp_path, "rb") as video_file:
+                # Send to chat if no Yandex Disk configured
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n⏫ Загружаю в чат...",
+                    parse_mode="HTML"
+                )
+                with open(file_to_send, "rb") as video_file:
                     await bot.send_video(
                         chat_id=chat_id,
                         video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
@@ -439,16 +463,24 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загрузка в чат завершена!",
                     parse_mode="HTML"
                 )
+
         except Exception as e:
             logger.error(f"Error sending video: {e}")
             try:
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text=f"❌ Ошибка при отправке видео: {e}"
+                    text=f"❌ Ошибка: {e}"
                 )
             except Exception:
                 pass
+        finally:
+            # Cleanup transcoded file
+            if need_transcode and 'transcoded_path' in locals() and os.path.exists(transcoded_path):
+                try:
+                    os.remove(transcoded_path)
+                except:
+                    pass
 
     except Exception as e:
         logger.error(f"Error: {e}")

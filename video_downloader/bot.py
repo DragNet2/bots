@@ -29,6 +29,10 @@ video_queue = asyncio.Queue()
 is_downloading = False
 queue_task = None
 
+# Separate queue for uploads (allows parallel download+upload)
+upload_queue = asyncio.Queue()
+upload_workers = []
+
 # Active torrents tracking
 active_torrents = {}  # task_id -> {name, size, status, download_dir, chat_id, message_id}
 
@@ -410,7 +414,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 else:
                     raise Exception("Transcoding failed")
 
-            # Upload to Yandex Disk
+            # Upload to Yandex Disk (non-blocking - queue for background)
             if yandex:
                 # Create folder if needed
                 await yandex.create_folder(YADISK_FOLDER)
@@ -423,8 +427,6 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     ext = os.path.splitext(send_file_name)[1]
                     send_file_name = f"{clean_title}{ext}"
 
-                disk_path = f"{YADISK_FOLDER}/{send_file_name}"
-
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
@@ -432,17 +434,13 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     parse_mode="HTML"
                 )
 
-                upload_success = await yandex.upload_file(file_to_send, disk_path)
+                # Queue upload for background processing (file will be cleaned up by upload worker)
+                await upload_queue.put((chat_id, message_id, video_title, video_link, file_to_send, send_file_name))
 
-                if upload_success:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загружено на Яндекс.Диск!\n📁 {YADISK_FOLDER}/{send_file_name}",
-                        parse_mode="HTML"
-                    )
-                else:
-                    raise Exception("Yandex Disk upload failed")
+                # Download is complete, worker will handle upload
+                # Don't delete temp_path here - upload worker will do it
+                return  # Exit early to allow next download to start
+
             else:
                 # Send to chat if no Yandex Disk configured
                 await bot.edit_message_text(
@@ -489,6 +487,82 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
             os.remove(temp_path)
 
     is_downloading = False
+
+
+async def upload_worker():
+    """Background worker that handles Yandex Disk uploads in parallel with downloads."""
+    while True:
+        try:
+            # Wait for upload task
+            task_data = await upload_queue.get()
+
+            chat_id, message_id, video_title, video_link, file_path, send_file_name = task_data
+
+            try:
+                disk_path = f"{YADISK_FOLDER}/{send_file_name}"
+
+                async def upload_progress(loaded, total):
+                    percent = min(100, (loaded / total) * 100) if total > 0 else 0
+                    bar = progress_bar(percent, 100)
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск...\n{bar}",
+                            parse_mode="HTML"
+                        )
+                    except:
+                        pass
+
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск...",
+                    parse_mode="HTML"
+                )
+
+                success = await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress)
+
+                if success:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загружено на Яндекс.Диск!\n📁 {YADISK_FOLDER}/{send_file_name}",
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"{escape(video_title)}\n\n{video_link}\n\n❌ Ошибка загрузки на Яндекс.Диск",
+                        parse_mode="HTML"
+                    )
+
+                # Cleanup local file
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+
+            except Exception as e:
+                logger.error(f"Upload worker error: {e}")
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"❌ Ошибка: {e}",
+                        parse_mode="HTML"
+                    )
+                except:
+                    pass
+            finally:
+                upload_queue.task_done()
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Upload worker main error: {e}")
+            await asyncio.sleep(1)
 
 
 async def video_queue_worker():
@@ -1201,8 +1275,13 @@ async def handle_message(message: types.Message):
 
 
 async def main():
-    global queue_task
+    global queue_task, upload_workers
     queue_task = asyncio.create_task(video_queue_worker())
+
+    # Start upload workers (2 parallel uploads)
+    for _ in range(2):
+        upload_workers.append(asyncio.create_task(upload_worker()))
+
     await dp.start_polling(bot)
 
 

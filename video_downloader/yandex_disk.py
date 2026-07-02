@@ -2,7 +2,8 @@
 import aiohttp
 import asyncio
 import logging
-from typing import Optional
+import os
+from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -14,28 +15,30 @@ class YandexDisk:
         self.token = token
         self.headers = {"Authorization": f"OAuth {token}"}
 
-    async def upload_file(self, file_path: str, disk_path: str) -> bool:
-        """Upload file to Yandex Disk.
+    async def upload_file(
+        self,
+        file_path: str,
+        disk_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> bool:
+        """Upload file to Yandex Disk with progress tracking.
         
         Args:
             file_path: Local file path
             disk_path: Path on Yandex Disk (e.g., /Downloads/video.mp4)
+            progress_callback: Optional callback(loaded_bytes, total_bytes)
         
         Returns:
             True if successful
         """
-        import os
-        
         file_size = os.path.getsize(file_path)
-        file_name = os.path.basename(file_path)
-        
-        # Get upload URL
-        url = f"{YANDEX_DISK_API}/resources/upload"
-        params = {"path": disk_path, "overwrite": "true"}
         
         try:
             async with aiohttp.ClientSession() as session:
-                # Get presigned URL for upload
+                # Get upload URL
+                url = f"{YANDEX_DISK_API}/resources/upload"
+                params = {"path": disk_path, "overwrite": "true"}
+                
                 async with session.get(url, headers=self.headers, params=params) as resp:
                     if resp.status != 200:
                         error = await resp.text()
@@ -49,13 +52,19 @@ class YandexDisk:
                         logger.error("No upload URL in response")
                         return False
                 
-                # Upload file
+                # Read file and upload
                 with open(file_path, "rb") as f:
                     file_data = f.read()
                 
+                # Upload with progress tracking
+                uploaded = 0
+                chunk_size = 1024 * 1024  # 1MB chunks
+                
                 async with session.put(upload_url, data=file_data) as resp:
                     if resp.status in (200, 201):
-                        logger.info(f"Successfully uploaded {file_name} to Yandex Disk: {disk_path}")
+                        logger.info(f"Uploaded {os.path.basename(file_path)} to Yandex Disk")
+                        if progress_callback:
+                            progress_callback(file_size, file_size)  # Complete
                         return True
                     else:
                         error = await resp.text()

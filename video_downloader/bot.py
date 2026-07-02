@@ -167,6 +167,45 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
     return return_code == 0
 
 
+async def download_hls_video(m3u8_url: str, output_path: str, progress_callback):
+    """Download HLS video using ffmpeg."""
+    import asyncio
+
+    # Build ffmpeg command with SOCKS proxy
+    cmd = [
+        "ffmpeg", "-y",
+        "-protocol_whitelist", "https,tls,http,tcp",
+        "-headers", "Referer:https://rt.pornhub.com/",
+        "-i", m3u8_url,
+        "-c", "copy",
+        "-bsf:a", "aac_adtstoasc",
+        output_path
+    ]
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "ALL_PROXY": "socks5://127.0.0.1:1080"}
+    )
+
+    last_update = 0
+    while True:
+        if process.poll() is not None:
+            break
+        await asyncio.sleep(0.5)
+        current_time = asyncio.get_event_loop().time()
+        if current_time - last_update > 3:
+            try:
+                await progress_callback(50, 100, 0, 0)  # Indeterminate progress
+            except:
+                pass
+            last_update = current_time
+
+    return_code = process.wait()
+    return return_code == 0
+
+
 async def get_video_info_from_url(url: str):
     """Extract video info from various video hosting sites."""
     import re
@@ -195,35 +234,26 @@ async def get_video_info_from_url(url: str):
             title_match = re.search(r'<title>([^<]+)</title>', html)
             title = title_match.group(1).replace(" - Pornhub.com", "").strip() if title_match else "Video"
 
-            # Find video quality URLs - prioritize higher quality
+            # Find HLS video URLs - prioritize 720p
             patterns = [
-                r'"quality_720p"\s*:\s*"(https://[^"]+\.mp4[^"]*)"',
-                r'"quality_480p"\s*:\s*"(https://[^"]+\.mp4[^"]*)"',
-                r'"quality_240p"\s*:\s*"(https://[^"]+\.mp4[^"]*)"',
-                r'"defaultQuality"\s*:\s*\[(.*?)\]',
-                r'media_0\s*=(.*?);',
+                r'"quality":"720"[^}]+?"videoUrl":"([^"]+)"',
+                r'"quality":"480"[^}]+?"videoUrl":"([^"]+)"',
+                r'"quality":"1080"[^}]+?"videoUrl":"([^"]+)"',
+                r'"defaultQuality":true[^}]+?"videoUrl":"([^"]+)"',
             ]
 
             video_url = None
             for pattern in patterns:
-                match = re.search(pattern, html, re.DOTALL)
+                match = re.search(pattern, html)
                 if match:
-                    # Try to extract URL from the match
-                    url_match = re.search(r'https://[^"\']+\.mp4[^"\']*', match.group(0))
-                    if url_match:
-                        video_url = url_match.group(0)
-                        break
-
-            # Alternative: find any mp4 URL
-            if not video_url:
-                mp4_match = re.search(r'https://[^"\']+\.mp4[^"\']*', html)
-                if mp4_match:
-                    video_url = mp4_match.group(0)
+                    video_url = match.group(1).replace("\\/", "/")
+                    # Prefer HLS over direct MP4 for better quality
+                    if "master.m3u8" in video_url or video_url.endswith(".m3u8"):
+                        break  # Use HLS URL
 
             if video_url:
-                # Remove quality params from URL if present
-                video_url = re.sub(r'&quality=\d+', '', video_url)
-                return {"url": video_url, "title": title}
+                # Return HLS URL for ffmpeg to download
+                return {"url": video_url, "title": title, "is_hls": True}
 
         except Exception as e:
             logger.error(f"Pornhub extraction failed: {e}")
@@ -378,6 +408,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         video_title = video_info.get("title", "Без названия")
         video_url = video_info["url"]
         video_link = f'<a href="{escape(video_url)}">🔗 Ссылка на видео</a>'
+        is_hls = video_info.get("is_hls", False)
 
         async def on_progress(downloaded, total, current_bytes, total_bytes):
             bar = progress_bar(downloaded, 100)
@@ -394,7 +425,11 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
             except Exception:
                 pass
 
-        success = await download_with_progress(url, temp_path, on_progress)
+        # Use video_url (not original url) for download, handle HLS separately
+        if is_hls:
+            success = await download_hls_video(video_url, temp_path, on_progress)
+        else:
+            success = await download_with_progress(video_url, temp_path, on_progress)
 
         if not success:
             try:

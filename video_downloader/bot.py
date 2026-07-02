@@ -168,8 +168,8 @@ async def get_video_info_from_url(url: str):
     url_lower = url.lower()
 
     # VK video (various domains with VK video IDs)
-    vk_pattern = r'vk\.com|vk\.io|userapi\.com|mp4upload\.com|(-?\d+_\d+)'
-    if re.search(vk_pattern, url_lower) or 'w0w.ukdevilz.com' in url_lower or 'hot.noodlemagazine.com' in url_lower:
+    vk_pattern = r'vk\.com|vk\.io|vk\.ru|userapi\.com|mp4upload\.com'
+    if re.search(vk_pattern, url_lower):
         return await vk.get_video_info(url)
 
     # sex.spreee.name - uses embed-player.space CDN
@@ -209,8 +209,38 @@ async def get_video_info_from_url(url: str):
         except Exception as e:
             logger.error(f"Failed to extract from sex.spreee.name: {e}")
 
-    # 36ebalka.ru.actor and similar sites
-    if '36ebalka.ru' in url_lower or 'noodlemagazine.com' in url_lower or 'ukdevilz.com' in url_lower:
+    # ukdevilz.com, noodlemagazine.com - use direct video extraction
+    if 'ukdevilz.com' in url_lower or 'noodlemagazine.com' in url_lower:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["curl", "-s", "-L", "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", url],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            html = result.stdout
+
+            # Look for direct video file URLs
+            patterns = [
+                r'https://[^"\']+videofile[^"\']+\.mp4[^"\']*',
+                r'https://[^"\']+pvvstream[^"\']+\.mp4[^"\']*',
+                r'"file"\s*:\s*["\']([^"\']+)["\']',
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, html, re.IGNORECASE)
+                if match:
+                    video_url = match.group(1).replace("\\", "").split("?")[0]  # Remove query params
+                    # Extract title
+                    title_match = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html)
+                    title = title_match.group(1).strip() if title_match else "Video"
+                    return {"url": video_url, "title": title}
+
+        except Exception as e:
+            logger.error(f"Failed to extract from ukdevilz/noodlemagazine: {e}")
+
+    # 36ebalka.ru and similar sites
+    if '36ebalka.ru' in url_lower:
         try:
             import subprocess
             result = subprocess.run(

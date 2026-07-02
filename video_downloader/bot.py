@@ -11,6 +11,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
 from vk_client import VKClient
+from yandex_disk import YandexDisk
 
 load_dotenv()
 
@@ -18,6 +19,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
+vk_client = VKClient(os.getenv("VK_TOKEN", ""))
+yandex = YandexDisk(os.getenv("YANDEX_TOKEN", "")) if os.getenv("YANDEX_TOKEN") else None
 dp = Dispatcher()
 vk = VKClient()
 
@@ -966,6 +969,45 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         if task_id in active_torrents:
             del active_torrents[task_id]
             logger.info(f"Removed torrent {task_id} from active_torrents")
+
+
+@dp.message(Command("yadisk"))
+async def cmd_yadisk(message: types.Message):
+    """Check Yandex Disk status or upload files."""
+    global yandex
+
+    if not yandex:
+        await message.answer("❌ Яндекс.Диск не настроен.")
+        return
+
+    disk_info = await yandex.get_info()
+    if not disk_info:
+        await message.answer("❌ Не удалось подключиться к Яндекс.Диску.")
+        return
+
+    total = int(disk_info.get("total_space", 0))
+    used = int(disk_info.get("used_space", 0))
+    free = total - used
+    display_name = disk_info.get("user", {}).get("display_name", "Unknown")
+    is_paid = disk_info.get("is_paid", False)
+
+    def format_size(bytes_size):
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if bytes_size < 1024:
+                return f"{bytes_size:.1f} {unit}"
+            bytes_size /= 1024
+        return f"{bytes_size:.1f} PB"
+
+    status = "💎 Premium" if is_paid else "📁 Free"
+    await message.answer(
+        f"📂 <b>Яндекс.Диск</b>\n"
+        f"👤 {display_name}\n"
+        f"{status}\n\n"
+        f"💾 Занято: <code>{format_size(used)}</code>\n"
+        f"💿 Свободно: <code>{format_size(free)}</code>\n"
+        f"📦 Всего: <code>{format_size(total)}</code>",
+        parse_mode="HTML"
+    )
 
 
 @dp.message(Command("start"))

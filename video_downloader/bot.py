@@ -372,8 +372,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         except Exception:
             pass
 
-        # Check if video needs transcoding (>50MB for direct send)
-        need_transcode = file_size > 50 * 1024 * 1024  # > 50MB
+        # Check if video needs transcoding (>1.5GB)
+        need_transcode = file_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB
 
         try:
             if need_transcode:

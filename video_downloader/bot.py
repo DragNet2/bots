@@ -253,6 +253,7 @@ async def get_video_info_from_url(url: str):
 
             # Look for video player sources
             patterns = [
+                r'<meta\s+property="og:video"\s+content="([^"]+)"',
                 r'<video[^>]+src=["\']([^"\']+)["\']',
                 r'"file"\s*:\s*["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
                 r'"src"\s*:\s*["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',

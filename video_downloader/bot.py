@@ -223,14 +223,16 @@ async def get_video_info_from_url(url: str):
 
             # Look for direct video file URLs
             patterns = [
-                r'https://[^"\']+videofile[^"\']+\.mp4[^"\']*',
-                r'https://[^"\']+pvvstream[^"\']+\.mp4[^"\']*',
-                r'"file"\s*:\s*["\']([^"\']+)["\']',
+                (r'(https://[^"\']+videofile[^"\']+\.mp4[^"\']*)', 1),
+                (r'(https://[^"\']+pvvstream[^"\']+\.mp4[^"\']*)', 1),
+                (r'"file"\s*:\s*["\']([^"\']+)["\']', 1),
             ]
-            for pattern in patterns:
+            for pattern, group_idx in patterns:
                 match = re.search(pattern, html, re.IGNORECASE)
                 if match:
-                    video_url = match.group(1).replace("\\", "").split("?")[0]  # Remove query params
+                    video_url = match.group(group_idx).replace("\\", "").split("?")[0]  # Remove query params
+                    if not video_url.startswith("http"):
+                        continue
                     # Extract title
                     title_match = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html)
                     title = title_match.group(1).strip() if title_match else "Video"
@@ -253,14 +255,16 @@ async def get_video_info_from_url(url: str):
 
             # Look for video player sources - prioritize direct .mp4 files
             patterns = [
-                r'https://[^"\']+36ebalka\.ru[^"\']+\.mp4[^"\']*',  # Direct mp4 from 36ebalka
-                r'https://[^"\']+get_file[^"\']+\.mp4[^"\']*',  # get_file mp4
-                r'<meta\s+property="og:video"\s+content="([^"]+)"',  # og:video (fallback)
+                (r'(https://[^"\']+36ebalka\.ru[^"\']+\.mp4[^"\']*)', 1),  # Direct mp4 from 36ebalka
+                (r'(https://[^"\']+get_file[^"\']+\.mp4[^"\']*)', 1),  # get_file mp4
+                (r'<meta\s+property="og:video"\s+content="([^"]+)"', 1),  # og:video (fallback)
             ]
-            for pattern in patterns:
+            for pattern, group_idx in patterns:
                 match = re.search(pattern, html, re.IGNORECASE)
                 if match:
-                    video_url = match.group(1).replace("\\", "")
+                    video_url = match.group(group_idx).replace("\\", "")
+                    if not video_url.startswith("http"):
+                        continue
                     title_match = re.search(r'<title>([^<]+)</title>', html)
                     title = title_match.group(1).strip() if title_match else "Video"
                     return {"url": video_url, "title": title}

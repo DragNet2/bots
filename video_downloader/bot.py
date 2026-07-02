@@ -1018,8 +1018,15 @@ async def handle_message(message: types.Message):
         asyncio.create_task(download_torrent(message.chat.id, status_msg.message_id, text))
         return
 
-    # Check if it's a VK video link
-    if "vk.com" not in text.lower() and "vkvideo.ru" not in text.lower():
+    # Check if it's a VK video link or other supported video sites
+    text_lower = text.lower()
+    is_video_url = any(domain in text_lower for domain in [
+        "vk.com", "vkvideo.ru", "vk.ru",
+        "ukdevilz.com", "noodlemagazine.com",
+        "sex.spreee.name", "36ebalka.ru",
+        "embed-player.space"
+    ])
+    if not is_video_url and not is_torrent_url(text):
         await message.answer("Отправьте ссылку на видео из ВКонтакте или торрент.")
         return
 

@@ -890,17 +890,21 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "Привет! Отправь мне ссылку на видео из ВКонтакте, "
-        "и я перешлю его тебе.\n\n"
-        "Можно отправлять несколько ссылок — они будут обработаны по очереди.\n\n"
-        "Также поддерживаются ссылки на Rutracker (.torrent, magnet)."
+        "Привет! Отправь мне ссылку на видео, и я перешлю его тебе.\n\n"
+        "Поддерживаются:\n"
+        "• VK видео\n"
+        "• sex.spreee.name\n"
+        "• 36ebalka.ru\n"
+        "• noodlemagazine.com\n"
+        "• Торренты (Rutracker, magnet)\n\n"
+        "Можно отправлять несколько ссылок — они будут обработаны по очереди."
     )
 
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     await message.answer(
-        "📹 <b>Видео из ВК:</b> отправь ссылку на видео\n"
+        "📹 <b>Видео:</b> отправь ссылку на видео (VK, sex.spreee, 36ebalka и др.)\n"
         "📥 <b>Торренты:</b> отправь ссылку Rutracker или magnet\n\n"
         "Команды:\n"
         "/queue — статус очереди\n"

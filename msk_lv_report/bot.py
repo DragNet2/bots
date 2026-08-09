@@ -13,7 +13,7 @@ from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKe
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # Конфигурация
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8369771647:AAHyS9haEDBtpzjOlAyUWcpar4gbk-trfyg")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8369771647:AAHzjNzayWeQvU-K2UfhuTyb01_8opnckBA")
 SCRIPT_PATH = os.getenv("REPORT_SCRIPT", "/home/bots/msk_lv_report/scripts/collect_and_notify.sh")
 CHECK_SERVICES_SCRIPT = os.getenv("CHECK_SERVICES_SCRIPT", "/home/bots/msk_lv_report/scripts/check_services.sh")
 

@@ -711,7 +711,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ["/usr/local/bin/ukusongs-db-backup.sh", "delete", filename],
             capture_output=True, text=True, timeout=30
         )
-        await query.answer(result.stdout.strip() or "❌ Ошибка", show_alert=True)
+        if result.returncode == 0:
+            await query.answer("✅ Бэкап удалён", show_alert=True)
+            # Показываем обновлённый список
+            await show_backup_list_for_callback(query, context, "delete", "Удалить бэкап")
+        else:
+            await query.answer("❌ " + (result.stderr.strip() or "Ошибка"), show_alert=True)
 
 
 async def show_backup_list_for_callback(query, context, action, title):
@@ -730,7 +735,11 @@ async def show_backup_list_for_callback(query, context, action, title):
     callback_data_parts = query.data.split(":")
     if len(callback_data_parts) > 2:
         try:
-            page = int(callback_data_parts[2])
+            page_str = callback_data_parts[2]
+            if page_str.startswith('p'):
+                page = int(page_str[1:])
+            else:
+                page = 0
         except:
             page = 0
 

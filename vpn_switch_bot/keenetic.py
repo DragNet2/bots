@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import httpx
 import logging
+import ipaddress
 from typing import Optional
 
 from config import config
@@ -17,6 +18,7 @@ class KeeneticClient:
         self._client = httpx.AsyncClient(timeout=30.0, verify=False, follow_redirects=True)
         self._authenticated = False
         self._policies_cache: Optional[dict] = None
+        self._interfaces_cache: Optional[list[dict]] = None
 
     async def authenticate(self) -> bool:
         try:
@@ -125,6 +127,79 @@ class KeeneticClient:
                     return True
 
         logger.warning(f"Unexpected response: {response}")
+        return False
+
+    async def get_interfaces(self, refresh: bool = False) -> list[dict]:
+        if self._interfaces_cache is not None and not refresh:
+            return self._interfaces_cache
+
+        data = await self._request("GET", "/rci/show/interface")
+        if isinstance(data, list):
+            self._interfaces_cache = data
+        elif isinstance(data, dict):
+            self._interfaces_cache = [v for v in data.values() if isinstance(v, dict)]
+        else:
+            self._interfaces_cache = []
+
+        return self._interfaces_cache
+
+    def get_interface_internal_name(self, description: str) -> Optional[str]:
+        if not self._interfaces_cache:
+            return None
+        for iface in self._interfaces_cache:
+            if iface.get("description") == description:
+                return iface.get("id") or iface.get("interface") or iface.get("name")
+            for key in ("id", "interface", "name"):
+                if iface.get(key) == description:
+                    return iface.get("id") or iface.get("interface") or iface.get("name")
+        return None
+
+    async def get_static_routes(self) -> list[dict]:
+        data = await self._request("GET", "/rci/show/ip/route")
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("route", []) if "route" in data else [data]
+        return []
+
+    async def add_static_route(
+        self,
+        address: str,
+        mask: str,
+        gateway: str,
+        interface_internal: str,
+        description: str
+    ) -> bool:
+        try:
+            net = ipaddress.IPv4Network(f"{address}/{mask}", strict=False)
+            prefix = str(net.prefixlen)
+        except Exception as e:
+            logger.warning(f"Could not compute prefix for {address}/{mask}: {e}")
+            prefix = None
+
+        payload = {
+            "host": address,
+            "mask": mask,
+            "gateway": gateway,
+            "interface": interface_internal,
+            "comment": description,
+        }
+        if prefix:
+            payload["prefix"] = prefix
+
+        logger.info(f"Adding route: {payload}")
+        response = await self._request("POST", "/rci/ip/route", payload)
+
+        if isinstance(response, dict):
+            if any(k in response for k in ("host", "route", "status", "id")):
+                return True
+            if "error" in response or "message" in response:
+                logger.warning(f"Route add reported: {response}")
+                return False
+        if isinstance(response, list) and len(response) > 0:
+            return True
+
+        logger.warning(f"Unexpected route add response: {response}")
         return False
 
     async def close(self):

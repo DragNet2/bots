@@ -18,4 +18,8 @@ class Config:
 
     ALLOWED_USER_IDS: list = field(default_factory=lambda: [233590599])
 
+    ROUTE_IFACE_VPN_ON_DESC: str = os.getenv("ROUTE_IFACE_VPN_ON_DESC", "VPN ON")
+    ROUTE_IFACE_ROSTELECOM_DESC: str = os.getenv("ROUTE_IFACE_ROSTELECOM_DESC", "Ростелеком")
+    ROUTE_IFACE_ARZNET_DESC: str = os.getenv("ROUTE_IFACE_ARZNET_DESC", "ArzNet")
+
 config = Config()

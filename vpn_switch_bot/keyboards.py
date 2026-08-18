@@ -9,6 +9,9 @@ def get_main_keyboard() -> types.InlineKeyboardMarkup:
     builder.row(
         types.InlineKeyboardButton(text="📋 Список устройств", callback_data="refresh"),
     )
+    builder.row(
+        types.InlineKeyboardButton(text="🛣 Настройка маршрутизации", callback_data="routes_start"),
+    )
     return builder.as_markup()
 
 
@@ -42,3 +45,31 @@ def get_confirm_keyboard(mac: str, policy: str, device_name: str) -> types.Inlin
         )
     )
     return builder.as_markup()
+
+
+def get_route_interface_keyboard() -> types.InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(
+            text="🟢 VPN ON",
+            callback_data="route_iface_vpn_on"
+        ),
+        types.InlineKeyboardButton(
+            text="🔴 Ростелеком",
+            callback_data="route_iface_rostelecom"
+        ),
+        types.InlineKeyboardButton(
+            text="🟡 ArzNet",
+            callback_data="route_iface_arznet"
+        ),
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="❌ Отмена", callback_data="routes_cancel")
+    )
+    return builder.as_markup()
+
+
+def get_routes_action_row() -> list[types.InlineKeyboardButton]:
+    return [
+        types.InlineKeyboardButton(text="🛣 Маршрутизация", callback_data="routes_start"),
+    ]

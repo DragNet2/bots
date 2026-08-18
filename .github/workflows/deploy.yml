@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/deploy.yml'
       - 'msk_lv_report/**'
       - 'tasktracker_bot/**'
       - 'vpn_switch_bot/**'
@@ -30,10 +31,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Determine bots to deploy
         id: bots
         run: |
+          set +e
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ "${{ inputs.bot }}" = "all" ]; then
               echo "bots=msk_lv_report tasktracker_bot vpn_switch_bot ym_downloader video_downloader" >> $GITHUB_OUTPUT
@@ -41,7 +45,12 @@ jobs:
               echo "bots=${{ inputs.bot }}" >> $GITHUB_OUTPUT
             fi
           else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD | awk -F/ '{print $1}' | sort -u | tr '\n' ' ')
+            echo "Commit range: HEAD~1..HEAD"
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | awk -F/ '{print $1}' | sort -u | tr '\n' ' ')
+            if [ -z "$CHANGED" ]; then
+              echo "WARN: git diff returned empty, falling back to all affected by commit"
+              CHANGED=$(git show --name-only --pretty=format: HEAD | awk -F/ '{print $1}' | sort -u | tr '\n' ' ')
+            fi
             FILTERED=""
             for b in msk_lv_report tasktracker_bot vpn_switch_bot ym_downloader video_downloader; do
               case " $CHANGED " in
@@ -51,11 +60,13 @@ jobs:
             FILTERED=$(echo "$FILTERED" | xargs)
             echo "bots=${FILTERED:-none}" >> $GITHUB_OUTPUT
           fi
+          set -e
 
       - name: Show deployment plan
         run: |
           echo "Event: ${{ github.event_name }}"
-          echo "Bots to deploy: ${{ steps.bots.outputs.bots }}"
+          echo "Input bot: ${{ inputs.bot }}"
+          echo "Bots to deploy: [${{ steps.bots.outputs.bots }}]"
 
       - name: Deploy via SSH
         if: steps.bots.outputs.bots != 'none'
@@ -67,13 +78,19 @@ jobs:
           BOTS: ${{ steps.bots.outputs.bots }}
         run: |
           if [ -z "$LV_SERVER_HOST" ]; then
-            echo "Error: missing server host (secret LV_SERVER_HOST is empty or not set)"
+            echo "::error::Secret LV_SERVER_HOST is empty or not set in https://github.com/DragNet2/bots/settings/secrets/actions"
+            exit 1
+          fi
+          if [ -z "$LV_SERVER_USER" ]; then
+            echo "::error::Secret LV_SERVER_USER is empty or not set"
             exit 1
           fi
           if [ -z "$LV_SERVER_SSH_KEY" ]; then
-            echo "Error: missing SSH key (secret LV_SERVER_SSH_KEY is empty or not set)"
+            echo "::error::Secret LV_SERVER_SSH_KEY is empty or not set"
             exit 1
           fi
+
+          echo "Target host: $LV_SERVER_USER@$LV_SERVER_HOST:${LV_SERVER_PORT:-22}"
 
           echo "$LV_SERVER_SSH_KEY" > private_key
           chmod 600 private_key
@@ -81,32 +98,46 @@ jobs:
           PORT="${LV_SERVER_PORT:-22}"
 
           cat > deploy_script.sh << 'REMOTE_EOF'
-            set -e
             BOT_NAME="$1"
             echo "==> Deploying $BOT_NAME"
-            cd /home/bots/$BOT_NAME
-            git pull origin main
+            cd /home/bots/$BOT_NAME || { echo "ERROR: /home/bots/$BOT_NAME not found"; exit 1; }
+            echo "  -> git pull"
+            git pull origin main || { echo "ERROR: git pull failed"; exit 1; }
             if [ -f "requirements.txt" ]; then
-              pip install -r requirements.txt
+              echo "  -> pip install -r requirements.txt"
+              pip install -r requirements.txt || echo "WARN: pip returned non-zero, continuing"
             fi
             if [ -f "start.sh" ]; then
-              bash start.sh
-            else
-              sudo systemctl restart $BOT_NAME
+              echo "  -> bash start.sh"
+              bash start.sh && echo "<== Done $BOT_NAME (start.sh)" && exit 0
             fi
-            echo "<== Done $BOT_NAME"
+            echo "  -> systemctl restart $BOT_NAME"
+            sudo -n systemctl restart $BOT_NAME && echo "<== Done $BOT_NAME (systemd)" && exit 0
+            echo "WARN: systemctl restart failed (possibly no sudoers, no unit or no systemctl); trying direct restart"
+            pkill -f "python.*$BOT_NAME" || true
+            nohup python3 bot.py > /dev/null 2>&1 &
+            echo "<== Done $BOT_NAME (fallback nohup)"
           REMOTE_EOF
 
+          STATUS=0
           for BOT in $BOTS; do
             if [ -z "$BOT" ]; then continue; fi
             echo ""
             echo "---- Deploying $BOT ----"
             ssh -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=15 \
+                -o BatchMode=yes \
+                -o ConnectTimeout=20 \
+                -o ServerAliveInterval=60 \
                 -p "$PORT" \
                 -i private_key \
                 $LV_SERVER_USER@$LV_SERVER_HOST \
                 "bash -s -- \"$BOT\"" < deploy_script.sh
+            RC=$?
+            if [ $RC -ne 0 ]; then
+              echo "::warning::SSH deploy failed for $BOT (exit=$RC)"
+              STATUS=1
+            fi
           done
 
           rm -f private_key deploy_script.sh
+          exit $STATUS

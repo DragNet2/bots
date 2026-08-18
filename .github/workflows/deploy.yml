@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'bots/msk_lv_report/**'
-      - 'bots/tasktracker_bot/**'
-      - 'bots/vpn_switch_bot/**'
-      - 'bots/ym_downloader/**'
-      - 'bots/video_downloader/**'
+      - 'msk_lv_report/**'
+      - 'tasktracker_bot/**'
+      - 'vpn_switch_bot/**'
+      - 'ym_downloader/**'
+      - 'video_downloader/**'
   workflow_dispatch:
     inputs:
       bot:
@@ -26,7 +26,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'bots/')
 
     steps:
       - name: Checkout code
@@ -35,34 +34,79 @@ jobs:
       - name: Determine bots to deploy
         id: bots
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            if [ "${{ inputs.bot }}" == "all" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.bot }}" = "all" ]; then
               echo "bots=msk_lv_report tasktracker_bot vpn_switch_bot ym_downloader video_downloader" >> $GITHUB_OUTPUT
             else
               echo "bots=${{ inputs.bot }}" >> $GITHUB_OUTPUT
             fi
           else
-            # Get changed bot directories
-            CHANGED=$(git diff --name-only HEAD~1 HEAD | grep '^bots/' | cut -d/ -f2 | sort -u | tr '\n' ' ')
-            echo "bots=${CHANGED:-none}" >> $GITHUB_OUTPUT
+            CHANGED=$(git diff --name-only HEAD~1 HEAD | awk -F/ '{print $1}' | sort -u | tr '\n' ' ')
+            FILTERED=""
+            for b in msk_lv_report tasktracker_bot vpn_switch_bot ym_downloader video_downloader; do
+              case " $CHANGED " in
+                *" $b "*) FILTERED="$FILTERED $b" ;;
+              esac
+            done
+            FILTERED=$(echo "$FILTERED" | xargs)
+            echo "bots=${FILTERED:-none}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Show deployment plan
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Bots to deploy: ${{ steps.bots.outputs.bots }}"
+
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.LV_SERVER_HOST }}
-          username: ${{ secrets.LV_SERVER_USER }}
-          key: ${{ secrets.LV_SERVER_SSH_KEY }}
-          port: ${{ secrets.LV_SERVER_PORT || '22' }}
-          envs: BOT_NAME
-          script: |
+        if: steps.bots.outputs.bots != 'none'
+        env:
+          LV_SERVER_HOST: ${{ secrets.LV_SERVER_HOST }}
+          LV_SERVER_USER: ${{ secrets.LV_SERVER_USER }}
+          LV_SERVER_SSH_KEY: ${{ secrets.LV_SERVER_SSH_KEY }}
+          LV_SERVER_PORT: ${{ secrets.LV_SERVER_PORT }}
+          BOTS: ${{ steps.bots.outputs.bots }}
+        run: |
+          if [ -z "$LV_SERVER_HOST" ]; then
+            echo "Error: missing server host (secret LV_SERVER_HOST is empty or not set)"
+            exit 1
+          fi
+          if [ -z "$LV_SERVER_SSH_KEY" ]; then
+            echo "Error: missing SSH key (secret LV_SERVER_SSH_KEY is empty or not set)"
+            exit 1
+          fi
+
+          echo "$LV_SERVER_SSH_KEY" > private_key
+          chmod 600 private_key
+
+          PORT="${LV_SERVER_PORT:-22}"
+
+          cat > deploy_script.sh << 'REMOTE_EOF'
+            set -e
+            BOT_NAME="$1"
+            echo "==> Deploying $BOT_NAME"
             cd /home/bots/$BOT_NAME
             git pull origin main
-            pip install -r requirements.txt
+            if [ -f "requirements.txt" ]; then
+              pip install -r requirements.txt
+            fi
             if [ -f "start.sh" ]; then
               bash start.sh
             else
-              systemctl restart $BOT_NAME
+              sudo systemctl restart $BOT_NAME
             fi
-        env:
-          BOT_NAME: ${{ steps.bots.outputs.bots }}
+            echo "<== Done $BOT_NAME"
+          REMOTE_EOF
+
+          for BOT in $BOTS; do
+            if [ -z "$BOT" ]; then continue; fi
+            echo ""
+            echo "---- Deploying $BOT ----"
+            ssh -o StrictHostKeyChecking=no \
+                -o ConnectTimeout=15 \
+                -p "$PORT" \
+                -i private_key \
+                $LV_SERVER_USER@$LV_SERVER_HOST \
+                "bash -s -- \"$BOT\"" < deploy_script.sh
+          done
+
+          rm -f private_key deploy_script.sh

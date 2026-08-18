@@ -99,8 +99,11 @@ jobs:
 
           cat > deploy_script.sh << 'REMOTE_EOF'
             BOT_NAME="$1"
+            BOT_DIR="/home/bots/$BOT_NAME"
             echo "==> Deploying $BOT_NAME"
-            cd /home/bots/$BOT_NAME || { echo "ERROR: /home/bots/$BOT_NAME not found"; exit 1; }
+            cd "$BOT_DIR" || { echo "ERROR: $BOT_DIR not found"; exit 1; }
+            git config --global --add safe.directory "$BOT_DIR" || true
+            git config --global --add safe.directory /home/bots || true
             echo "  -> git pull"
             git pull origin main || { echo "ERROR: git pull failed"; exit 1; }
             if [ -f "requirements.txt" ]; then

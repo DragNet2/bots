@@ -695,7 +695,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ["/usr/local/bin/ukusongs-db-backup.sh", "lock", filename],
             capture_output=True, text=True, timeout=30
         )
-        await query.answer(result.stdout.strip() or "❌ Ошибка", show_alert=True)
+        if result.returncode == 0:
+            await query.answer("🔒 Бэкап залочен" if result.stdout.strip() else "🔒 Готово", show_alert=True)
+        else:
+            await query.answer("❌ " + (result.stderr.strip() or "Ошибка лока"), show_alert=True)
+        # Обновляем список
+        await show_backup_list_for_callback(query, context, "lock", "Залочить бэкап")
 
     elif data.startswith("backup:unlock:"):
         filename = data.replace("backup:unlock:", "")
@@ -703,7 +708,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ["/usr/local/bin/ukusongs-db-backup.sh", "unlock", filename],
             capture_output=True, text=True, timeout=30
         )
-        await query.answer(result.stdout.strip() or "❌ Ошибка", show_alert=True)
+        if result.returncode == 0:
+            await query.answer("🔓 Бэкап разлочен" if result.stdout.strip() else "🔓 Готово", show_alert=True)
+        else:
+            await query.answer("❌ " + (result.stderr.strip() or "Ошибка разлока"), show_alert=True)
+        # Обновляем список
+        await show_backup_list_for_callback(query, context, "unlock", "Разлочить бэкап")
 
     elif data.startswith("backup:delete:"):
         filename = data.replace("backup:delete:", "")
@@ -713,10 +723,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if result.returncode == 0:
             await query.answer("✅ Бэкап удалён", show_alert=True)
-            # Показываем обновлённый список
-            await show_backup_list_for_callback(query, context, "delete", "Удалить бэкап")
         else:
-            await query.answer("❌ " + (result.stderr.strip() or "Ошибка"), show_alert=True)
+            await query.answer("❌ " + (result.stderr.strip() or "Ошибка удаления"), show_alert=True)
+        # Показываем обновлённый список
+        await show_backup_list_for_callback(query, context, "delete", "Удалить бэкап")
 
 
 async def show_backup_list_for_callback(query, context, action, title):

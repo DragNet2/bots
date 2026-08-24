@@ -561,6 +561,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     chat_id = str(query.message.chat.id)
 
+    # DEBUG: логирование callback_data
+    print(f"[DEBUG] callback_data: '{data}'")
+
     if chat_id not in ALLOWED_CHATS:
         await query.answer("⛔ Бот не авторизован", show_alert=True)
         return
@@ -717,10 +720,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("backup:delete:"):
         filename = data.replace("backup:delete:", "")
+        print(f"[DEBUG] backup:delete: filename='{filename}'")
         result = subprocess.run(
             ["/usr/local/bin/ukusongs-db-backup.sh", "delete", filename],
             capture_output=True, text=True, timeout=30
         )
+        print(f"[DEBUG] backup:delete: returncode={result.returncode}, stdout='{result.stdout}', stderr='{result.stderr}'")
         if result.returncode == 0:
             await query.answer("✅ Бэкап удалён", show_alert=True)
         else:

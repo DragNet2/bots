@@ -104,6 +104,8 @@ jobs:
             cd "$BOT_DIR" || { echo "ERROR: $BOT_DIR not found"; exit 1; }
             git config --global --add safe.directory "$BOT_DIR" || true
             git config --global --add safe.directory /home/bots || true
+            echo "  -> git clean -fd (remove untracked files)"
+            git clean -fd || true
             echo "  -> git pull"
             git pull origin main || { echo "ERROR: git pull failed"; exit 1; }
             if [ -f "requirements.txt" ]; then

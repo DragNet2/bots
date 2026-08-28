@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/deploy.yml'
       - 'server_report/**'
+      - 'openrouter_bot/**'
       - 'tasktracker_bot/**'
       - 'vpn_switch_bot/**'
       - 'ym_downloader/**'
@@ -18,6 +19,7 @@ on:
         type: choice
         options:
           - server_report
+          - openrouter_bot
           - tasktracker_bot
           - vpn_switch_bot
           - ym_downloader
@@ -40,7 +42,7 @@ jobs:
           set +e
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ "${{ inputs.bot }}" = "all" ]; then
-              echo "bots=server_report tasktracker_bot vpn_switch_bot ym_downloader video_downloader" >> $GITHUB_OUTPUT
+              echo "bots=server_report openrouter_bot tasktracker_bot vpn_switch_bot ym_downloader video_downloader" >> $GITHUB_OUTPUT
             else
               echo "bots=${{ inputs.bot }}" >> $GITHUB_OUTPUT
             fi
@@ -52,7 +54,7 @@ jobs:
               CHANGED=$(git show --name-only --pretty=format: HEAD | awk -F/ '{print $1}' | sort -u | tr '\n' ' ')
             fi
             FILTERED=""
-            for b in server_report tasktracker_bot vpn_switch_bot ym_downloader video_downloader; do
+            for b in server_report openrouter_bot tasktracker_bot vpn_switch_bot ym_downloader video_downloader; do
               case " $CHANGED " in
                 *" $b "*) FILTERED="$FILTERED $b" ;;
               esac

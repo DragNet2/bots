@@ -13,7 +13,9 @@ from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKe
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # Конфигурация
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8369771647:AAHzjNzayWeQvU-K2UfhuTyb01_8opnckBA")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not BOT_TOKEN:
+    raise SystemExit("TELEGRAM_BOT_TOKEN не задан — укажите его в .env")
 SCRIPT_PATH = os.getenv("REPORT_SCRIPT", "/usr/local/bin/lv_report.sh")
 CHECK_SERVICES_SCRIPT = os.getenv("CHECK_SERVICES_SCRIPT", "/home/bots/server_report/scripts/check_services.sh")
 PULSE_SCRIPT = os.getenv("PULSE_SCRIPT", "/usr/local/bin/ukusongs-pulse.sh")

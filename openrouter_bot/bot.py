@@ -351,7 +351,7 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None) -> s
                 used_section += f"• {escape(name)} — цена не найдена\n"
 
     # Раздел 2: лучшие модели по цене/качеству (из rankings)
-    best_value = "🏆 Пользовательский рейтинг\n"
+    best_value = '🏆 <a href="https://openrouter.ai/rankings#top-models">Пользовательский рейтинг</a>\n'
     
     if rankings_data and "models" in rankings_data:
         # Используем данные из rankings
@@ -387,8 +387,6 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None) -> s
         inp_m = inp * 1_000_000
         out_m = outp * 1_000_000
         best_value += f"• {escape(model_name)} ⭐{rating:.1f} — ⬆️ ${inp_m:.2f}/M . ⬇️ ${out_m:.2f}/M\n"
-    if not rated_models:
-        best_value += "Модели не найдены\n"
 
     # Раздел 3: бесплатные модели по рейтингу
     free_section = "🆓 Бесплатные модели (копируйте имена)\n"
@@ -536,14 +534,14 @@ async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rankings_data = fetch_rankings()
         
         prices = prices_text(models, used_models, rankings_data)
-        await msg.edit_text(prices, parse_mode="HTML")
+        await msg.edit_text(prices, parse_mode="HTML", disable_web_page_preview=True)
     except ActivityUnavailable as e:
         # Если /activity недоступен, покажем цены без списка использованных
         try:
             models = await asyncio.to_thread(fetch_models)
             rankings_data = fetch_rankings()
             prices = prices_text(models, set(), rankings_data)
-            await msg.edit_text(prices, parse_mode="HTML")
+            await msg.edit_text(prices, parse_mode="HTML", disable_web_page_preview=True)
         except Exception:
             await msg.edit_text(f"❌ Расход по моделям недоступен: {escape(str(e))}")
     except Exception as e:

@@ -32,7 +32,6 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
@@ -352,7 +351,7 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None) -> s
                 used_section += f"• {escape(name)} — цена не найдена\n"
 
     # Раздел 2: лучшие модели по цене/качеству (из rankings)
-    best_value = '🏆 <a href="https://openrouter.ai/rankings">Лучшие по цене/качеству</a>\n'
+    best_value = "🏆 Пользовательский рейтинг\n"
     
     if rankings_data and "models" in rankings_data:
         # Используем данные из rankings
@@ -392,7 +391,7 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None) -> s
         best_value += "Модели не найдены\n"
 
     # Раздел 3: бесплатные модели по рейтингу
-    free_section = "🆓 <b>Бесплатные модели</b>\n"
+    free_section = "🆓 Бесплатные модели (копируйте имена)\n"
     free_models = []
     for m in models:
         pricing = m.get("pricing", {}) or {}
@@ -410,10 +409,8 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None) -> s
     
     free_models.sort(key=lambda x: -x[1])
     for model_id, rating, ctx_len in free_models[:8]:
-        name = model_id.split("/")[-1][:28]
-        ctx = f"{ctx_len // 1000}K" if ctx_len else "?"
-        rating_str = f"⭐{rating:.1f}" if rating > 0 else "⭐?"
-        free_section += f"• {escape(name)} {rating_str} 📝{ctx}\n"
+        name = model_id.split("/")[-1][:32]
+        free_section += f"• <code>{name}</code>\n"
     if not free_models:
         free_section += "Модели не найдены\n"
 
@@ -537,13 +534,15 @@ async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Получаем данные с rankings
         rankings_data = fetch_rankings()
         
-        await msg.edit_text(prices_text(models, used_models, rankings_data), parse_mode="HTML")
+        prices, keyboard = prices_text(models, used_models, rankings_data)
+        await msg.edit_text(prices, parse_mode="HTML")
     except ActivityUnavailable as e:
         # Если /activity недоступен, покажем цены без списка использованных
         try:
             models = await asyncio.to_thread(fetch_models)
             rankings_data = fetch_rankings()
-            await msg.edit_text(prices_text(models, set(), rankings_data), parse_mode="HTML")
+            prices, keyboard = prices_text(models, set(), rankings_data)
+        await msg.edit_text(prices, parse_mode="HTML")
         except Exception:
             await msg.edit_text(f"❌ Расход по моделям недоступен: {escape(str(e))}")
     except Exception as e:

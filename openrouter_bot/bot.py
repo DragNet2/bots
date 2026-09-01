@@ -154,6 +154,17 @@ def fetch_activity() -> list:
     return r.json().get("data", [])
 
 
+def fetch_models() -> dict:
+    """Список моделей OpenRouter с ценами и рейтингом."""
+    r = requests.get(
+        "https://openrouter.ai/api/v1/models",
+        headers=_auth(OPENROUTER_API_KEY),
+        timeout=30
+    )
+    r.raise_for_status()
+    return r.json().get("data", [])
+
+
 # ----------------------------- тексты сообщений -----------------------------
 
 def balance_text(credits: dict) -> str:
@@ -232,11 +243,98 @@ def alert_text(balance: float, threshold: float) -> str:
     )
 
 
+def prices_text(models: list, used_models: set) -> str:
+    """Формирует текст с ценами на модели по трём разделам."""
+    
+    # Раздел 1: использованные модели за последние 30 дней
+    used_section = "📊 <b>Ваши модели (30 дней)</b>\n"
+    if not used_models:
+        used_section += "Нет данных — используйте модели, чтобы увидеть их здесь\n"
+    else:
+        used_models_sorted = sorted(
+            [(m, _get_model_price(m, models)) for m in used_models],
+            key=lambda x: x[1]["input"] if x[1] else float("inf")
+        )
+        for model_id, price_info in used_models_sorted[:10]:
+            name = model_id.split("/")[-1][:30]
+            if price_info:
+                used_section += f"• {escape(name)} — 💰 ${price_info['input']:.4f}/${price_info['output']:.4f}\n"
+            else:
+                used_section += f"• {escape(name)} — цена не найдена\n"
+
+    # Раздел 2: лучшие модели по цене/качеству
+    best_value = "🏆 <b>Лучшие по цене/качеству</b>\n"
+    rated_models = []
+    for m in models:
+        pricing = m.get("pricing", {})
+        input_price = float(pricing.get("prompt_tokens", 0) or 0)
+        output_price = float(pricing.get("completion_tokens", 0) or 0)
+        context_length = int(m.get("context_length", 0) or 0)
+        
+        # Исключаем слишком дорогие модели и без рейтинга
+        if output_price > 0.01 or context_length < 8000:
+            continue
+        
+        rating = float(m.get("rating", 0) or 0)
+        if rating < 7.0:
+            continue
+            
+        # Считаем "стоимость за качество" — чем ниже, тем лучше
+        # Чем ниже цена и чем выше рейтинг, тем лучше
+        score = (input_price + output_price) / (rating ** 2)
+        rated_models.append((m["id"], score, rating, input_price, output_price))
+    
+    rated_models.sort(key=lambda x: x[1])
+    for model_id, score, rating, inp, outp in rated_models[:8]:
+        name = model_id.split("/")[-1][:28]
+        best_value += f"• {escape(name)} ⭐{rating:.1f} — 💰 ${inp:.6f}/${outp:.6f}\n"
+    if not rated_models:
+        best_value += "Модели не найдены\n"
+
+    # Раздел 3: бесплатные модели по рейтингу
+    free_section = "🆓 <b>Бесплатные модели</b>\n"
+    free_models = []
+    for m in models:
+        pricing = m.get("pricing", {})
+        input_price = float(pricing.get("prompt_tokens", 0) or 0)
+        output_price = float(pricing.get("completion_tokens", 0) or 0)
+        
+        # Бесплатные — оба нуля
+        if input_price > 0 or output_price > 0:
+            continue
+            
+        rating = float(m.get("rating", 0) or 0)
+        context_length = int(m.get("context_length", 0) or 0)
+        free_models.append((m["id"], rating, context_length))
+    
+    free_models.sort(key=lambda x: -x[1])
+    for model_id, rating, ctx_len in free_models[:8]:
+        name = model_id.split("/")[-1][:28]
+        ctx = f"{ctx_len // 1000}K" if ctx_len else "?"
+        free_section += f"• {escape(name)} ⭐{rating:.1f} 📝{ctx}\n"
+    if not free_models:
+        free_section += "Модели не найдены\n"
+
+    return f"💰 <b>Цены на модели OpenRouter</b>\n\n{used_section}\n{best_value}\n{free_section}"
+
+
+def _get_model_price(model_id: str, models: list) -> dict | None:
+    """Получает цену модели по ID."""
+    for m in models:
+        if m.get("id") == model_id:
+            pricing = m.get("pricing", {})
+            return {
+                "input": float(pricing.get("prompt_tokens", 0) or 0),
+                "output": float(pricing.get("completion_tokens", 0) or 0)
+            }
+    return None
+
+
 # ----------------------------- хендлеры -----------------------------
 
 def get_main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [["💰 Баланс", "📅 Сегодня"], ["🗓 Месяц", "🤖 По моделям"]],
+        [["💰 Баланс", "📅 Сегодня"], ["🗓 Месяц", "🤖 По моделям"], ["💰 Цены"]],
         resize_keyboard=True,
     )
 
@@ -251,6 +349,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💰 Баланс — текущий остаток\n"
         "📅 Сегодня / 🗓 Месяц — расход за период\n"
         "🤖 По моделям — разбивка расходов\n"
+        "💰 Цены — цены и рейтинг моделей\n"
         "⚠️ Уведомления при остатке ниже $5 / $2 / $1",
         parse_mode="HTML",
         reply_markup=get_main_menu(),
@@ -312,6 +411,29 @@ async def models_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Ошибка OpenRouter API: {escape(str(e))[:300]}")
 
 
+async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not authorized(update):
+        return
+    msg = await update.message.reply_text("⏳ Загружаю цены...")
+    try:
+        models = await asyncio.to_thread(fetch_models)
+        state = load_state()
+        
+        # Получаем модели, использованные за последние 30 дней
+        items = state.get("activity_items", [])
+        used_models = set()
+        if items:
+            for it in items:
+                model = it.get("model")
+                if model:
+                    used_models.add(model)
+        
+        await msg.edit_text(prices_text(models, used_models), parse_mode="HTML")
+    except Exception as e:
+        log.warning("prices error: %s", e)
+        await msg.edit_text(f"❌ Ошибка: {escape(str(e))[:300]}")
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == "💰 Баланс":
@@ -322,6 +444,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_spending(update, context, "month")
     elif text == "🤖 По моделям":
         await models_cmd(update, context)
+    elif text == "💰 Цены":
+        await prices_cmd(update, context)
 
 
 # ----------------------------- фоновая проверка алертов -----------------------------
@@ -369,6 +493,7 @@ def main():
     app.add_handler(CommandHandler("today", today_cmd))
     app.add_handler(CommandHandler("month", month_cmd))
     app.add_handler(CommandHandler("models", models_cmd))
+    app.add_handler(CommandHandler("prices", prices_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_handler))
 
     if app.job_queue:

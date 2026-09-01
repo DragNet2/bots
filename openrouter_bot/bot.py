@@ -542,7 +542,7 @@ async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             models = await asyncio.to_thread(fetch_models)
             rankings_data = fetch_rankings()
             prices, keyboard = prices_text(models, set(), rankings_data)
-        await msg.edit_text(prices, parse_mode="HTML")
+            await msg.edit_text(prices, parse_mode="HTML")
         except Exception:
             await msg.edit_text(f"❌ Расход по моделям недоступен: {escape(str(e))}")
     except Exception as e:

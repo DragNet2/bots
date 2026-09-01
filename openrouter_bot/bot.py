@@ -6,6 +6,7 @@ openrouter_bot — Telegram-бот мониторинга баланса и ра
 - 💰 текущий баланс (GET /api/v1/credits)
 - 📅 расход за сегодня и 🗓 за месяц (дельта баланса, время московское)
 - 🤖 расход по моделям (GET /api/v1/activity, нужен management-ключ)
+- 💰 цены на модели по трём разделам (использованные, лучшие, бесплатные)
 - ⚠️ уведомления при остатке ниже $5 / $2 / $1
 
 Запускается на LV (systemd-юнит openrouter_bot). Конфиг — .env рядом с bot.py.
@@ -21,6 +22,7 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 import requests
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
@@ -165,6 +167,91 @@ def fetch_models() -> dict:
     return r.json().get("data", [])
 
 
+def fetch_rankings() -> dict | None:
+    """Получает данные с rankings страницы OpenRouter."""
+    try:
+        r = requests.get("https://openrouter.ai/rankings", timeout=30)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        
+        # Ищем таблицу с рейтингами
+        tables = soup.find_all("table")
+        if not tables:
+            return None
+        
+        ranked_models = []
+        for table in tables:
+            rows = table.find_all("tr")[1:]  # Пропускаем заголовок
+        
+            for row in rows:
+                cols = row.find_all("td")
+                if len(cols) < 3:
+                    continue
+                
+                model_name = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+                if not model_name:
+                    continue
+                
+                # Извлекаем цену
+                pricing_cell = cols[2] if len(cols) > 2 else None
+                if pricing_cell:
+                    pricing_text = pricing_cell.get_text(strip=True)
+                    # Парсим "⬆️ $0.06/M . ⬇️ $0.40/M"
+                    if "⬆️" in pricing_text:
+                        parts = pricing_text.split("⬆️")
+                        if len(parts) > 1:
+                            input_part = parts[1].strip().split("·")[0].strip()
+                            try:
+                                input_price = float(input_part.replace("$", "").replace("/", ""))
+                            except ValueError:
+                                input_price = 0
+                            
+                            if len(parts) > 2:
+                                output_part = parts[2].strip().split("·")[1].strip() if "·" in parts[2] else parts[2].strip()
+                                try:
+                                    output_price = float(output_part.replace("$", "").replace("/", ""))
+                                except ValueError:
+                                    output_price = 0
+                            else:
+                                output_price = 0
+                        else:
+                            input_price = output_price = 0
+                    else:
+                        input_price = output_price = 0
+                
+                # Извлекаем рейтинг
+                rating = 0
+                rating_cell = cols[3] if len(cols) > 3 else None
+                if rating_cell:
+                    rating_text = rating_cell.get_text(strip=True)
+                    if "⭐" in rating_text:
+                        try:
+                            rating = float(rating_text.replace("⭐", "").strip())
+                        except ValueError:
+                            rating = 0
+                    else:
+                        try:
+                            rating = float(rating_text)
+                        except ValueError:
+                            rating = 0
+                
+                if model_name and (input_price > 0 or output_price > 0):
+                    ranked_models.append({
+                        "name": model_name,
+                        "input": input_price,
+                        "output": output_price,
+                        "rating": rating
+                    })
+        
+        if ranked_models:
+            return {"models": ranked_models}
+        return None
+        
+    except Exception as e:
+        log.warning("Rankings fetch error: %s", e)
+        return None
+
+
 # ----------------------------- тексты сообщений -----------------------------
 
 def balance_text(credits: dict) -> str:
@@ -243,7 +330,7 @@ def alert_text(balance: float, threshold: float) -> str:
     )
 
 
-def prices_text(models: list, used_models: set) -> str:
+def prices_text(models: list, used_models: set, rankings_data: dict | None) -> str:
     """Формирует текст с ценами на модели по трём разделам."""
     
     # Раздел 1: использованные модели за последние 30 дней
@@ -264,34 +351,43 @@ def prices_text(models: list, used_models: set) -> str:
             else:
                 used_section += f"• {escape(name)} — цена не найдена\n"
 
-    # Раздел 2: лучшие модели по цене/качеству
-    best_value = "🏆 <b>Лучшие по цене/качеству</b>\n"
-    rated_models = []
-    for m in models:
-        pricing = m.get("pricing", {}) or {}
-        input_price = float(pricing.get("prompt", 0) or 0)
-        output_price = float(pricing.get("completion", 0) or 0)
-        context_length = int(m.get("context_length", 0) or 0)
-        
-        # Исключаем слишком дорогие модели и без рейтинга
-        if output_price > 0.01 or context_length < 8000:
-            continue
-        
-        # Рейтинг из openrouter_ranking (поле рейтинга модели на сайте)
-        rating = float(m.get("openrouter_ranking", 0) or m.get("rating", 0) or 0)
-        if rating < 7.0:
-            continue
-            
-        # Считаем "стоимость за качество" — чем ниже, тем лучше
-        score = (input_price + output_price) / (rating ** 2) if rating > 0 else float("inf")
-        rated_models.append((m["id"], score, rating, input_price, output_price))
+    # Раздел 2: лучшие модели по цене/качеству (из rankings)
+    best_value = '🏆 <a href="https://openrouter.ai/rankings">Лучшие по цене/качеству</a>\n'
     
-    rated_models.sort(key=lambda x: x[1])
-    for model_id, score, rating, inp, outp in rated_models[:8]:
-        name = model_id.split("/")[-1][:28]
+    if rankings_data and "models" in rankings_data:
+        # Используем данные из rankings
+        ranked_models = rankings_data["models"]
+        rated_models = [
+            (m["name"], 0, m["rating"], m["input"], m["output"])
+            for m in ranked_models[:8]
+        ]
+        rated_models.sort(key=lambda x: -x[2])  # Сортируем по рейтингу
+    else:
+        # Fallback: используем данные из API моделей
+        rated_models = []
+        for m in models:
+            pricing = m.get("pricing", {}) or {}
+            input_price = float(pricing.get("prompt", 0) or 0)
+            output_price = float(pricing.get("completion", 0) or 0)
+            context_length = int(m.get("context_length", 0) or 0)
+            
+            # Исключаем слишком дорогие модели и без рейтинга
+            if output_price > 0.01 or context_length < 8000:
+                continue
+            
+            rating = float(m.get("openrouter_ranking", 0) or m.get("rating", 0) or 0)
+            if rating < 7.0:
+                continue
+                
+            score = (input_price + output_price) / (rating ** 2) if rating > 0 else float("inf")
+            rated_models.append((m["id"], score, rating, input_price, output_price))
+        
+        rated_models.sort(key=lambda x: x[1])
+    
+    for model_name, score, rating, inp, outp in rated_models[:8]:
         inp_m = inp * 1_000_000
         out_m = outp * 1_000_000
-        best_value += f"• {escape(name)} ⭐{rating:.1f} — ⬆️ ${inp_m:.2f}/M . ⬇️ ${out_m:.2f}/M\n"
+        best_value += f"• {escape(model_name)} ⭐{rating:.1f} — ⬆️ ${inp_m:.2f}/M . ⬇️ ${out_m:.2f}/M\n"
     if not rated_models:
         best_value += "Модели не найдены\n"
 
@@ -429,6 +525,7 @@ async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             asyncio.to_thread(fetch_models),
             asyncio.to_thread(fetch_activity),
         )
+        state = load_state()
         
         # Получаем модели, использованные за последние 30 дней
         used_models: set[str] = set()
@@ -437,12 +534,16 @@ async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if model:
                 used_models.add(model)
         
-        await msg.edit_text(prices_text(models, used_models), parse_mode="HTML")
+        # Получаем данные с rankings
+        rankings_data = fetch_rankings()
+        
+        await msg.edit_text(prices_text(models, used_models, rankings_data), parse_mode="HTML")
     except ActivityUnavailable as e:
         # Если /activity недоступен, покажем цены без списка использованных
         try:
             models = await asyncio.to_thread(fetch_models)
-            await msg.edit_text(prices_text(models, set()), parse_mode="HTML")
+            rankings_data = fetch_rankings()
+            await msg.edit_text(prices_text(models, set(), rankings_data), parse_mode="HTML")
         except Exception:
             await msg.edit_text(f"❌ Расход по моделям недоступен: {escape(str(e))}")
     except Exception as e:

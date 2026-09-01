@@ -260,7 +260,7 @@ def prices_text(models: list, used_models: set) -> str:
             if price_info:
                 inp = price_info['input'] * 1_000_000
                 out = price_info['output'] * 1_000_000
-                used_section += f"• {escape(name)} — 💰 ${inp:.2f}/M input · ${out:.2f}/M output\n"
+                used_section += f"• {escape(name)} — ⬆️ ${inp:.2f}/M . ⬇️ ${out:.2f}/M\n"
             else:
                 used_section += f"• {escape(name)} — цена не найдена\n"
 
@@ -291,7 +291,7 @@ def prices_text(models: list, used_models: set) -> str:
         name = model_id.split("/")[-1][:28]
         inp_m = inp * 1_000_000
         out_m = outp * 1_000_000
-        best_value += f"• {escape(name)} ⭐{rating:.1f} — 💰 ${inp_m:.2f}/M · ${out_m:.2f}/M\n"
+        best_value += f"• {escape(name)} ⭐{rating:.1f} — ⬆️ ${inp_m:.2f}/M . ⬇️ ${out_m:.2f}/M\n"
     if not rated_models:
         best_value += "Модели не найдены\n"
 

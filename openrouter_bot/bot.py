@@ -267,17 +267,8 @@ def prices_text(models: list, used_models: set) -> str:
     rated_models = []
     for m in models:
         pricing = m.get("pricing", {}) or {}
-        # OpenRouter API использует разные форматы цен
-        input_price = float(
-            pricing.get("input", 0) or
-            pricing.get("prompt_tokens", 0) or
-            list(pricing.values())[0] if pricing else 0
-        )
-        output_price = float(
-            pricing.get("output", 0) or
-            pricing.get("completion_tokens", 0) or
-            list(pricing.values())[1] if len(pricing) > 1 else 0
-        )
+        input_price = float(pricing.get("prompt", 0) or 0)
+        output_price = float(pricing.get("completion", 0) or 0)
         context_length = int(m.get("context_length", 0) or 0)
         
         # Исключаем слишком дорогие модели и без рейтинга
@@ -305,16 +296,8 @@ def prices_text(models: list, used_models: set) -> str:
     free_models = []
     for m in models:
         pricing = m.get("pricing", {}) or {}
-        input_price = float(
-            pricing.get("input", 0) or
-            pricing.get("prompt_tokens", 0) or
-            list(pricing.values())[0] if pricing else 0
-        )
-        output_price = float(
-            pricing.get("output", 0) or
-            pricing.get("completion_tokens", 0) or
-            list(pricing.values())[1] if len(pricing) > 1 else 0
-        )
+        input_price = float(pricing.get("prompt", 0) or 0)
+        output_price = float(pricing.get("completion", 0) or 0)
         
         # Бесплатные — оба нуля
         if input_price > 0 or output_price > 0:
@@ -345,17 +328,9 @@ def _get_model_price(model_id: str, models: list) -> dict | None:
         # Ищем сначала по полному совпадению, потом по короткому имени
         if mid == model_id or mid == short_name or mid.endswith(short_name):
             pricing = m.get("pricing", {}) or {}
-            # OpenRouter API использует разные форматы цен
-            input_price = float(
-                pricing.get("input", 0) or
-                pricing.get("prompt_tokens", 0) or
-                list(pricing.values())[0] if pricing else 0
-            )
-            output_price = float(
-                pricing.get("output", 0) or
-                pricing.get("completion_tokens", 0) or
-                list(pricing.values())[1] if len(pricing) > 1 else 0
-            )
+            # OpenRouter использует "prompt" и "completion"
+            input_price = float(pricing.get("prompt", 0) or 0)
+            output_price = float(pricing.get("completion", 0) or 0)
             return {"input": input_price, "output": output_price}
     return None
 

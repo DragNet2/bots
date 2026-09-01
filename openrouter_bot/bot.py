@@ -425,7 +425,7 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None, free
         best_value += f"• {escape(model_name)} ⭐{rating:.1f} — ⬆️ ${inp_m:.2f}/M . ⬇️ ${out_m:.2f}/M\n"
 
     # Раздел 3: бесплатные модели (из /models?max_price=0&order=coding-high-to-low)
-    free_section = "🆓 Бесплатные модели (копируйте имена)\n"
+    free_section = '<a href="https://openrouter.ai/models?max_price=0&output_modalities=text&order=coding-high-to-low">🆓 Бесплатные модели</a>\n'
     free_model_ids = free_models_list or []
     for model_id in free_model_ids[:8]:
         name = model_id.split("/")[-1][:32]

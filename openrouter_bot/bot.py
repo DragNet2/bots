@@ -170,7 +170,7 @@ def fetch_models() -> dict:
 def fetch_free_models_coding() -> list:
     """Получает список бесплатных text-моделей отсортированных по coding рейтингу."""
     try:
-        url = "https://openrouter.ai/models?max_price=0&output_modalities=text&order=coding-high-to-low"
+        url = "https://openrouter.ai/api/v1/models"
         r = requests.get(url, timeout=30)
         r.raise_for_status()
         data = r.json().get("data", [])

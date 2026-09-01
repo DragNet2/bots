@@ -275,13 +275,13 @@ def prices_text(models: list, used_models: set) -> str:
         if output_price > 0.01 or context_length < 8000:
             continue
         
-        rating = float(m.get("rating", 0) or 0)
+        # Рейтинг из openrouter_ranking (поле рейтинга модели на сайте)
+        rating = float(m.get("openrouter_ranking", 0) or m.get("rating", 0) or 0)
         if rating < 7.0:
             continue
             
         # Считаем "стоимость за качество" — чем ниже, тем лучше
-        # Чем ниже цена и чем выше рейтинг, тем лучше
-        score = (input_price + output_price) / (rating ** 2)
+        score = (input_price + output_price) / (rating ** 2) if rating > 0 else float("inf")
         rated_models.append((m["id"], score, rating, input_price, output_price))
     
     rated_models.sort(key=lambda x: x[1])
@@ -303,7 +303,8 @@ def prices_text(models: list, used_models: set) -> str:
         if input_price > 0 or output_price > 0:
             continue
             
-        rating = float(m.get("rating", 0) or 0)
+        # Рейтинг из openrouter_ranking
+        rating = float(m.get("openrouter_ranking", 0) or m.get("rating", 0) or 0)
         context_length = int(m.get("context_length", 0) or 0)
         free_models.append((m["id"], rating, context_length))
     
@@ -311,7 +312,8 @@ def prices_text(models: list, used_models: set) -> str:
     for model_id, rating, ctx_len in free_models[:8]:
         name = model_id.split("/")[-1][:28]
         ctx = f"{ctx_len // 1000}K" if ctx_len else "?"
-        free_section += f"• {escape(name)} ⭐{rating:.1f} 📝{ctx}\n"
+        rating_str = f"⭐{rating:.1f}" if rating > 0 else "⭐?"
+        free_section += f"• {escape(name)} {rating_str} 📝{ctx}\n"
     if not free_models:
         free_section += "Модели не найдены\n"
 
@@ -416,19 +418,26 @@ async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ Загружаю цены...")
     try:
-        models = await asyncio.to_thread(fetch_models)
-        state = load_state()
+        models, items = await asyncio.gather(
+            asyncio.to_thread(fetch_models),
+            asyncio.to_thread(fetch_activity),
+        )
         
         # Получаем модели, использованные за последние 30 дней
-        items = state.get("activity_items", [])
-        used_models = set()
-        if items:
-            for it in items:
-                model = it.get("model")
-                if model:
-                    used_models.add(model)
+        used_models: set[str] = set()
+        for it in items:
+            model = it.get("model")
+            if model:
+                used_models.add(model)
         
         await msg.edit_text(prices_text(models, used_models), parse_mode="HTML")
+    except ActivityUnavailable as e:
+        # Если /activity недоступен, покажем цены без списка использованных
+        try:
+            models = await asyncio.to_thread(fetch_models)
+            await msg.edit_text(prices_text(models, set()), parse_mode="HTML")
+        except Exception:
+            await msg.edit_text(f"❌ Расход по моделям недоступен: {escape(str(e))}")
     except Exception as e:
         log.warning("prices error: %s", e)
         await msg.edit_text(f"❌ Ошибка: {escape(str(e))[:300]}")

@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from html import escape
@@ -164,6 +165,36 @@ def fetch_models() -> dict:
     )
     r.raise_for_status()
     return r.json().get("data", [])
+
+
+def fetch_free_models_coding() -> list:
+    """Получает список бесплатных text-моделей отсортированных по coding рейтингу."""
+    try:
+        url = "https://openrouter.ai/models?max_price=0&output_modalities=text&order=coding-high-to-low"
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        
+        # Ищем ссылки на модели вида /models/{provider}/{model-name}
+        model_links = soup.find_all("a", href=re.compile(r"^/models/[^/]+/[^/]+/?$"))
+        
+        seen = set()
+        models = []
+        for link in model_links:
+            href = link.get("href", "").rstrip("/")
+            if href in seen:
+                continue
+            seen.add(href)
+            # Извлекаем model_id из href: /models/{provider}/{name}
+            parts = href.split("/")
+            if len(parts) >= 4:
+                model_id = f"{parts[2]}/{parts[3]}"
+                models.append(model_id)
+        
+        return models
+    except Exception as e:
+        log.warning("Free models fetch error: %s", e)
+        return []
 
 
 def fetch_rankings() -> dict | None:
@@ -329,7 +360,7 @@ def alert_text(balance: float, threshold: float) -> str:
     )
 
 
-def prices_text(models: list, used_models: set, rankings_data: dict | None) -> str:
+def prices_text(models: list, used_models: set, rankings_data: dict | None, free_models_list: list | None = None) -> str:
     """Формирует текст с ценами на модели по трём разделам."""
     
     # Раздел 1: использованные модели за последние 30 дней
@@ -388,31 +419,15 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None) -> s
         out_m = outp * 1_000_000
         best_value += f"• {escape(model_name)} ⭐{rating:.1f} — ⬆️ ${inp_m:.2f}/M . ⬇️ ${out_m:.2f}/M\n"
 
-    # Раздел 3: бесплатные модели по рейтингу
+    # Раздел 3: бесплатные модели (из /models?max_price=0&order=coding-high-to-low)
     free_section = "🆓 Бесплатные модели (копируйте имена)\n"
-    free_models = []
-    for m in models:
-        pricing = m.get("pricing", {}) or {}
-        input_price = float(pricing.get("prompt", 0) or 0)
-        output_price = float(pricing.get("completion", 0) or 0)
-        
-        # Бесплатные — оба нуля
-        if input_price > 0 or output_price > 0:
-            continue
-            
-        # Рейтинг из openrouter_ranking
-        rating = float(m.get("openrouter_ranking", 0) or m.get("rating", 0) or 0)
-        context_length = int(m.get("context_length", 0) or 0)
-        free_models.append((m["id"], rating, context_length))
-    
-    # Сортируем: сначала с рейтингом (по убыванию), потом без рейтинга (по context_length)
-    free_models.sort(key=lambda x: (-x[1], -x[2]))
-    for model_id, rating, ctx_len in free_models[:8]:
+    free_model_ids = free_models_list or []
+    for model_id in free_model_ids[:8]:
         name = model_id.split("/")[-1][:32]
         free_section += f"• <code>{name}</code>\n"
-    if not free_models:
+    if not free_model_ids:
         free_section += "Модели не найдены\n"
-
+    
     return f"💰 <b>Цены на модели OpenRouter</b>\n\n{used_section}\n{best_value}\n{free_section}"
 
 
@@ -517,9 +532,11 @@ async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ Загружаю цены...")
     try:
-        models, items = await asyncio.gather(
+        models, items, free_models_list, rankings_data = await asyncio.gather(
             asyncio.to_thread(fetch_models),
             asyncio.to_thread(fetch_activity),
+            asyncio.to_thread(fetch_free_models_coding),
+            asyncio.to_thread(fetch_rankings),
         )
         state = load_state()
         
@@ -530,17 +547,17 @@ async def prices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if model:
                 used_models.add(model)
         
-        # Получаем данные с rankings
-        rankings_data = fetch_rankings()
-        
-        prices = prices_text(models, used_models, rankings_data)
+        prices = prices_text(models, used_models, rankings_data, free_models_list)
         await msg.edit_text(prices, parse_mode="HTML", disable_web_page_preview=True)
     except ActivityUnavailable as e:
         # Если /activity недоступен, покажем цены без списка использованных
         try:
-            models = await asyncio.to_thread(fetch_models)
-            rankings_data = fetch_rankings()
-            prices = prices_text(models, set(), rankings_data)
+            models, free_models_list, rankings_data = await asyncio.gather(
+                asyncio.to_thread(fetch_models),
+                asyncio.to_thread(fetch_free_models_coding),
+                asyncio.to_thread(fetch_rankings),
+            )
+            prices = prices_text(models, set(), rankings_data, free_models_list)
             await msg.edit_text(prices, parse_mode="HTML", disable_web_page_preview=True)
         except Exception:
             await msg.edit_text(f"❌ Расход по моделям недоступен: {escape(str(e))}")

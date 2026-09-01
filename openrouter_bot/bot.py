@@ -407,7 +407,8 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None) -> s
         context_length = int(m.get("context_length", 0) or 0)
         free_models.append((m["id"], rating, context_length))
     
-    free_models.sort(key=lambda x: -x[1])
+    # Сортируем: сначала с рейтингом (по убыванию), потом без рейтинга (по context_length)
+    free_models.sort(key=lambda x: (-x[1], -x[2]))
     for model_id, rating, ctx_len in free_models[:8]:
         name = model_id.split("/")[-1][:32]
         free_section += f"• <code>{name}</code>\n"

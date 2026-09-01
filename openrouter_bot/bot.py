@@ -173,25 +173,30 @@ def fetch_free_models_coding() -> list:
         url = "https://openrouter.ai/models?max_price=0&output_modalities=text&order=coding-high-to-low"
         r = requests.get(url, timeout=30)
         r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
+        data = r.json().get("data", [])
         
-        # Ищем ссылки на модели вида /models/{provider}/{model-name}
-        model_links = soup.find_all("a", href=re.compile(r"^/models/[^/]+/[^/]+/?$"))
-        
-        seen = set()
-        models = []
-        for link in model_links:
-            href = link.get("href", "").rstrip("/")
-            if href in seen:
+        # Фильтруем бесплатные text-модели (output_modalities содержит text)
+        free_models = []
+        for m in data:
+            pricing = m.get("pricing", {}) or {}
+            input_price = float(pricing.get("prompt", 0) or 0)
+            output_price = float(pricing.get("completion", 0) or 0)
+            if input_price > 0 or output_price > 0:
                 continue
-            seen.add(href)
-            # Извлекаем model_id из href: /models/{provider}/{name}
-            parts = href.split("/")
-            if len(parts) >= 4:
-                model_id = f"{parts[2]}/{parts[3]}"
-                models.append(model_id)
+            
+            # Только text-модели (без image/audio)
+            arch = m.get("architecture", {}) or {}
+            modalities = arch.get("output_modalities", []) or []
+            if modalities and "text" not in modalities:
+                continue
+            
+            ctx = int(m.get("context_length", 0) or 0)
+            rating = float(m.get("openrouter_ranking", 0) or 0)
+            free_models.append((m["id"], rating, ctx))
         
-        return models
+        # Сортируем: сначала с рейтингом, потом по context_length
+        free_models.sort(key=lambda x: (-x[1], -x[2]))
+        return [mid for mid, _, _ in free_models]
     except Exception as e:
         log.warning("Free models fetch error: %s", e)
         return []

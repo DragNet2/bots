@@ -54,7 +54,7 @@ jobs:
               CHANGED=$(git show --name-only --pretty=format: HEAD | awk -F/ '{print $1}' | sort -u | tr '\n' ' ')
             fi
             FILTERED=""
-            for b in server_report openrouter_bot tasktracker_bot vpn_switch_bot ym_downloader video_downloader; do
+            for b in server_report openrouter_bot ollama_bot tasktracker_bot vpn_switch_bot ym_downloader video_downloader; do
               case " $CHANGED " in
                 *" $b "*) FILTERED="$FILTERED $b" ;;
               esac

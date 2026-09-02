@@ -407,9 +407,9 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None, free
             if price_info:
                 inp = price_info['input'] * 1_000_000
                 out = price_info['output'] * 1_000_000
-                used_section += f"• {escape(name)} · ↑ {inp:.2f} // ↓ {out:.2f}\n"
+                used_section += f"• <code>{escape(name)}</code> · ↑ <b>{inp:.2f}</b> // ↓ <b>{out:.2f}</b>\n"
             else:
-                used_section += f"• {escape(name)} — цена не найдена\n"
+                used_section += f"• <code>{escape(name)}</code> — цена не найдена\n"
 
     # Раздел 2: лучшие модели по цене/качеству (из rankings)
     best_value = '🏆 <a href="https://openrouter.ai/rankings#top-models">Пользовательский рейтинг</a>\n'
@@ -447,7 +447,7 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None, free
     for model_name, score, rating, inp, outp in rated_models[:8]:
         inp_m = inp * 1_000_000
         out_m = outp * 1_000_000
-        best_value += f"• {escape(model_name)} ⭐{rating:.1f} · ↑ {inp_m:.2f} // ↓ {out_m:.2f}\n"
+        best_value += f"• <code>{escape(model_name)}</code> ⭐{rating:.1f} · ↑ <b>{inp_m:.2f}</b> // ↓ <b>{out_m:.2f}</b>\n"
 
     # Раздел 3: бесплатные модели (из /models?max_price=0&order=coding-high-to-low)
     free_section = '<a href="https://openrouter.ai/models?max_price=0&output_modalities=text&order=coding-high-to-low">🆓 Бесплатные модели</a>\n'

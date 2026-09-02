@@ -426,9 +426,7 @@ def models_text(items: list, pricing: dict | None = None) -> str:
     have_prices = any(_price_for(pricing, m.get("name", "")) for m in items)
     lines = [f"🤖 <b>Модели Ollama Cloud</b> — {len(items)} шт."]
     if have_prices:
-        lines.append(
-            "<i>Цены $ за 1M токенов: ↑ вход / ↓ выход</i>\n"
-        )
+        lines.append("Цены $ за 1M токенов: ↑ вход // ↓ выход\n")
     else:
         lines.append("")
     # Показываем первые 25, остальное — счётчик (одна строка на модель)

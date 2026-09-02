@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime
 from html import escape
@@ -275,6 +276,93 @@ def fetch_cloud_models() -> list:
     return cloud
 
 
+PRICING_URL = "https://ollama.com/pricing"
+PRICING_TTL_H = 24  # обновлять прайс не чаще раза в сутки
+
+
+def fetch_pricing(state: dict) -> dict:
+    """Цены cloud-моделей со страницы https://ollama.com/pricing.
+
+    Возвращает dict {имя_модели: {"in": float, "cached": float, "out": float}}
+    — $ за миллион токенов. Кэшируется в state.json на PRICING_TTL_H часов:
+    страница HTML (не API), дёргать её на каждый запрос /models нельзя.
+    При ошибке парсинга/сети возвращает последний удачный кэш, если есть.
+    """
+    cached = state.get("pricing") or {}
+    fetched_at = cached.get("fetched_at")
+    if fetched_at:
+        try:
+            age_h = (
+                datetime.now(TZ) - datetime.fromisoformat(fetched_at)
+            ).total_seconds() / 3600
+            if age_h < PRICING_TTL_H and cached.get("models"):
+                return cached["models"]
+        except ValueError:
+            pass  # битая дата в кэше — перекачиваем
+
+    r = requests.get(
+        PRICING_URL,
+        headers={
+            "Accept": "text/html",
+            "User-Agent": "Mozilla/5.0 (compatible; ollama_bot)",
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    table = soup.find("table")
+    if table is None:
+        log.warning("pricing: таблица на %s не найдена", PRICING_URL)
+        return cached.get("models") or {}
+
+    def _money(cell: str):
+        m = re.search(r"\$([0-9][0-9,]*(?:\.[0-9]+)?)", cell)
+        return float(m.group(1).replace(",", "")) if m else None
+
+    models = {}
+    for tr in table.find_all("tr"):
+        cells = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+        if len(cells) < 4 or not cells[0]:
+            continue
+        name, price_in, price_cached, price_out = cells[0], *cells[1:4]
+        prices = {
+            "in": _money(price_in),
+            "cached": _money(price_cached),
+            "out": _money(price_out),
+        }
+        if prices["in"] is None and prices["out"] is None:
+            continue
+        models[name] = prices
+
+    if not models:
+        log.warning("pricing: пустая таблица на %s", PRICING_URL)
+        return cached.get("models") or {}
+
+    state["pricing"] = {
+        "fetched_at": datetime.now(TZ).isoformat(timespec="seconds"),
+        "models": models,
+    }
+    save_state(state)
+    return models
+
+
+def _price_for(pricing: dict, model_name: str) -> dict | None:
+    """Ищет цену модели: точное имя, затем база до ':' (api: nemotron-3-nano:30b
+    -> pricing: nemotron-3-nano), затем префикс."""
+    if model_name in pricing:
+        return pricing[model_name]
+    base = model_name.split(":")[0]
+    if base in pricing:
+        return pricing[base]
+    for pname, prices in pricing.items():
+        if pname.split(":")[0] == base:
+            return prices
+    return None
+
+
 # ----------------------------- тексты сообщений -----------------------------
 
 def balance_text(acc: dict) -> str:
@@ -335,25 +423,41 @@ def spend_text(state: dict, balance: float, period: str) -> str:
     )
 
 
-def models_text(items: list) -> str:
+def models_text(items: list, pricing: dict | None = None) -> str:
     if not items:
         return (
             "🤖 <b>Модели Ollama Cloud</b>\n\n"
             "Модели не найдены. Проверьте OLLAMA_API_KEY или план на "
             "https://ollama.com/settings"
         )
+    pricing = pricing or {}
+    have_prices = any(_price_for(pricing, m.get("name", "")) for m in items)
     lines = [f"🤖 <b>Модели Ollama Cloud</b> — {len(items)} шт.\n"]
     # Показываем первые 25, остальное — счётчик
     for m in items[:25]:
         name = escape(m.get("name", "?"))
         size = m.get("size")
-        ctx = m.get("context_length") or m.get("max_context")
-        ctx_part = f" · ctx {ctx}" if ctx else ""
         size_part = f" · {human_size(size)}" if size else ""
-        lines.append(f"• <code>{name}</code>{size_part}{ctx_part}")
+        lines.append(f"• <code>{name}</code>{size_part}")
+        p = _price_for(pricing, m.get("name", ""))
+        if p and (p.get("in") is not None or p.get("out") is not None):
+            # $ за 1 млн токенов
+            pin = f"{p['in']:.2f}".rstrip("0").rstrip(".") if p.get("in") else "—"
+            pout = (
+                f"{p['out']:.2f}".rstrip("0").rstrip(".")
+                if p.get("out")
+                else "—"
+            )
+            lines.append(
+                f"  <i>вход ${pin} / выход ${pout} за 1M токенов</i>"
+            )
     if len(items) > 25:
         lines.append(f"\n…и ещё {len(items) - 25} моделей")
     lines.append("\nПолный список: https://ollama.com/search?c=cloud")
+    if not have_prices:
+        lines.append(
+            "Цены: https://ollama.com/pricing (не удалось загрузить)"
+        )
     return "\n".join(lines)
 
 
@@ -451,11 +555,24 @@ async def models_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ Загружаю модели...")
     try:
-        items = await asyncio.to_thread(fetch_cloud_models)
-        await msg.edit_text(models_text(items), parse_mode="HTML")
+        items, pricing = await asyncio.to_thread(_models_with_pricing)
+        await msg.edit_text(models_text(items, pricing), parse_mode="HTML")
     except Exception as e:
         log.warning("models error: %s", e)
         await msg.edit_text(f"❌ Ошибка Ollama API: {escape(str(e))[:300]}")
+
+
+def _models_with_pricing() -> tuple:
+    """Модели + прайс (прайс берётся из кэша или парсится с сайта)."""
+    items = fetch_cloud_models()
+    state = load_state()
+    try:
+        pricing = fetch_pricing(state)
+    except Exception as e:
+        # Прайс не критичен: показываем модели без цен
+        log.warning("pricing error: %s", e)
+        pricing = (state.get("pricing") or {}).get("models") or {}
+    return items, pricing
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

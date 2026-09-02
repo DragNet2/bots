@@ -439,13 +439,12 @@ def models_text(items: list, pricing: dict | None = None) -> str:
         )
     else:
         lines.append("")
-    # Показываем первые 25, остальное — счётчик
+    # Показываем первые 25, остальное — счётчик (одна строка на модель)
     for m in items[:25]:
         name = escape(m.get("name", "?"))
         size = m.get("size")
-        size_part = f" · {human_size(size)}" if size else ""
-        lines.append(f"• <code>{name}</code>{size_part}")
         p = _price_for(pricing, m.get("name", ""))
+        parts = []
         if p and (p.get("in") is not None or p.get("out") is not None):
             pin = f"{p['in']:.2f}".rstrip("0").rstrip(".") if p.get("in") else "—"
             pout = (
@@ -453,7 +452,11 @@ def models_text(items: list, pricing: dict | None = None) -> str:
                 if p.get("out")
                 else "—"
             )
-            lines.append(f"  <i>↗️ ${pin} / ↘️ ${pout}</i>")
+            parts.append(f"↗️ ${pin} ↘️ ${pout}")
+        if size:
+            parts.append(human_size(size))
+        tail = f" · {' || '.join(parts)}" if parts else ""
+        lines.append(f"• <code>{name}</code><i>{tail}</i>")
     if len(items) > 25:
         lines.append(f"\n…и ещё {len(items) - 25} моделей")
     lines.append("\nПолный список: https://ollama.com/search?c=cloud")

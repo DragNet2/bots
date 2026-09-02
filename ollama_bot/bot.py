@@ -447,11 +447,11 @@ def models_text(items: list, pricing: dict | None = None) -> str:
             lines.append(f"• <code>{name}</code>")
     if len(items) > 25:
         lines.append(f"\n…и ещё {len(items) - 25} моделей")
-    lines.append("\nПолный список: https://ollama.com/search?c=cloud")
     if not have_prices:
-        lines.append(
-            "Цены: https://ollama.com/pricing (не удалось загрузить)"
-        )
+        lines.append("Цены загрузить не удалось")
+    lines.append("\nСписок моделей: https://ollama.com/search?c=cloud")
+    lines.append("Цена на модели - https://ollama.com/pricing")
+    lines.append("--")
     return "\n".join(lines)
 
 
@@ -547,10 +547,16 @@ async def month_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def models_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update):
         return
-    msg = await update.message.reply_text("⏳ Загружаю модели...")
+    msg = await update.message.reply_text(
+        "⏳ Загружаю модели...", disable_web_page_preview=True
+    )
     try:
         items, pricing = await asyncio.to_thread(_models_with_pricing)
-        await msg.edit_text(models_text(items, pricing), parse_mode="HTML")
+        await msg.edit_text(
+            models_text(items, pricing),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
     except Exception as e:
         log.warning("models error: %s", e)
         await msg.edit_text(f"❌ Ошибка Ollama API: {escape(str(e))[:300]}")

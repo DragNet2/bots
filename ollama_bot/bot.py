@@ -432,7 +432,13 @@ def models_text(items: list, pricing: dict | None = None) -> str:
         )
     pricing = pricing or {}
     have_prices = any(_price_for(pricing, m.get("name", "")) for m in items)
-    lines = [f"🤖 <b>Модели Ollama Cloud</b> — {len(items)} шт.\n"]
+    lines = [f"🤖 <b>Модели Ollama Cloud</b> — {len(items)} шт."]
+    if have_prices:
+        lines.append(
+            "<i>Цены $ за 1M токенов: ↗️ вход / ↘️ выход</i>\n"
+        )
+    else:
+        lines.append("")
     # Показываем первые 25, остальное — счётчик
     for m in items[:25]:
         name = escape(m.get("name", "?"))
@@ -441,16 +447,13 @@ def models_text(items: list, pricing: dict | None = None) -> str:
         lines.append(f"• <code>{name}</code>{size_part}")
         p = _price_for(pricing, m.get("name", ""))
         if p and (p.get("in") is not None or p.get("out") is not None):
-            # $ за 1 млн токенов
             pin = f"{p['in']:.2f}".rstrip("0").rstrip(".") if p.get("in") else "—"
             pout = (
                 f"{p['out']:.2f}".rstrip("0").rstrip(".")
                 if p.get("out")
                 else "—"
             )
-            lines.append(
-                f"  <i>вход ${pin} / выход ${pout} за 1M токенов</i>"
-            )
+            lines.append(f"  <i>↗️ ${pin} / ↘️ ${pout}</i>")
     if len(items) > 25:
         lines.append(f"\n…и ещё {len(items) - 25} моделей")
     lines.append("\nПолный список: https://ollama.com/search?c=cloud")

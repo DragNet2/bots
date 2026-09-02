@@ -127,15 +127,24 @@ class AccountUnavailable(Exception):
     """Эндпоинт /api/me недоступен или вернул неожиданный формат."""
 
 
-def fetch_account() -> dict:
-    """Информация об аккаунте и балансе Ollama Cloud.
+def human_size(num_bytes: int) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if num_bytes < 1024:
+            return f"{num_bytes:.1f} {unit}" if unit != "B" else f"{num_bytes} B"
+        num_bytes /= 1024
+    return f"{num_bytes:.1f} PB"
 
-    Эндпоинт /api/me используется дашбордом https://ollama.com/settings —
-    отдаёт JSON с планом, лимитами и текущим использованием. Формат может
-    меняться без предупреждения; если ключ неверный или эндпоинт изменился —
+
+def fetch_account() -> dict:
+    """Информация об аккаунте Ollama Cloud.
+
+    Эндпоинт /api/me используется дашбордом https://ollama.com/settings и
+    ожидает POST (не GET). Отдаёт JSON с профилем (Email/Name/Plan). Для
+    бесплатного плана баланс/кредиты не возвращаются; normalize_account
+    обрабатывает оба варианта. Если ключ неверный или эндпоинт изменился —
     бросаем AccountUnavailable с понятным сообщением.
     """
-    r = requests.get(
+    r = requests.post(
         f"{API_BASE}/me",
         headers={**_auth(), "Accept": "application/json"},
         timeout=30,
@@ -145,10 +154,10 @@ def fetch_account() -> dict:
             "ключ отклонён /api/me — проверьте OLLAMA_API_KEY "
             "на https://ollama.com/settings/keys"
         )
-    if r.status_code == 404:
+    if r.status_code in (404, 405):
         raise AccountUnavailable(
-            "эндпоинт /api/me не найден — Ollama изменила API; "
-            "обновите бота"
+            f"эндпоинт /api/me недоступен ({r.status_code}) — "
+            "Ollama изменила API; обновите бота"
         )
     r.raise_for_status()
     return r.json()
@@ -157,20 +166,26 @@ def fetch_account() -> dict:
 def normalize_account(data: dict) -> dict:
     """Приводит ответ /api/me к стабильной внутренней структуре.
 
+    Реальный ответ сейчас содержит: ID, Email, Name, Plan, Bio, AvatarURL,
+    FirstName, LastName, Links, CreatedAt. Платные планы (Pro/Max/Team) могут
+    отдавать дополнительные поля — нормализатор понимает обе формы.
+
     Возвращает dict с полями:
-      - balance: float — доступный остаток (для алертов и расхода)
-      - plan: str — название плана (Free / Pro / Max / Team / …)
+      - balance: float — доступный остаток (0.0, если API не отдаёт)
+      - plan: str — название плана (free / pro / max / team / …)
+      - email: str | None
+      - name: str | None
       - included: float | None — размер включённого месячного пула ($)
       - extra: float | None — размер extra usage баланса ($)
       - used: float | None — использовано в текущем месяце ($)
-      - renews_at: str | None — дата следующего обновления
-      - raw: dict — полный ответ API для отладки
+      - renews_at: str | None
+      - raw: dict — полный ответ API
     """
     raw = data if isinstance(data, dict) else {}
 
-    # Возможные ключи в разных версиях ответа /api/me
     plan = (
-        raw.get("plan")
+        raw.get("Plan")
+        or raw.get("plan")
         or raw.get("plan_name")
         or raw.get("tier")
         or raw.get("subscription_plan")
@@ -191,6 +206,7 @@ def normalize_account(data: dict) -> dict:
         "monthly_credits",
         "plan_credits",
         "included",
+        "IncludedCredits",
         default=None,
     )
     extra = _money(
@@ -198,37 +214,37 @@ def normalize_account(data: dict) -> dict:
         "extra_balance",
         "add_on_balance",
         "extra",
+        "ExtraCredits",
         default=None,
     )
-    used = _money("used", "usage", "total_usage", default=None)
+    used = _money("used", "usage", "total_usage", "Used", default=None)
 
-    # Доступный остаток: суммируем всё доступное, вычитаем потраченное
     parts = [v for v in (included, extra) if v is not None]
     if parts:
         available = sum(parts) - (used or 0.0)
     else:
-        # Если API отдаёт только агрегированный остаток — используем его
         available = _money(
             "balance",
             "available",
             "remaining",
             "credit_balance",
+            "Balance",
             default=0.0,
         ) or 0.0
-        if used is not None and not parts:
-            # Нечем компенсировать used; оставляем available как есть
-            pass
 
     renews_at = (
         raw.get("renews_at")
         or raw.get("resets_at")
         or raw.get("next_billing_at")
         or raw.get("period_end")
+        or raw.get("RenewsAt")
     )
 
     return {
         "balance": max(float(available), 0.0),
         "plan": str(plan),
+        "email": raw.get("Email") or raw.get("email"),
+        "name": raw.get("Name") or raw.get("name"),
         "included": included,
         "extra": extra,
         "used": used,
@@ -238,7 +254,13 @@ def normalize_account(data: dict) -> dict:
 
 
 def fetch_cloud_models() -> list:
-    """Список моделей Ollama Cloud (фильтр :cloud)."""
+    """Список моделей Ollama Cloud (GET /api/tags).
+
+    Публичный эндпоинт ollama.com/api/tags не разделяет локальные и cloud
+    модели отдельным флагом, поэтому возвращаем всё, что доступно по ключу
+    (для бесплатного плана — каталог cloud-моделей). При наличии тега
+    :cloud оставляем только их, иначе — все модели.
+    """
     r = requests.get(
         f"{API_BASE}/tags",
         headers={**_auth(), "Accept": "application/json"},
@@ -246,12 +268,9 @@ def fetch_cloud_models() -> list:
     )
     r.raise_for_status()
     items = r.json().get("models", []) or []
-    cloud = []
-    for m in items:
-        name = m.get("name", "")
-        if ":cloud" in name:
-            cloud.append(m)
-    # Сортируем по имени
+    cloud = [m for m in items if ":cloud" in m.get("name", "")]
+    if not cloud:
+        cloud = items  # бесплатный план: cloud-модели без суффикса
     cloud.sort(key=lambda m: m.get("name", ""))
     return cloud
 
@@ -261,17 +280,39 @@ def fetch_cloud_models() -> list:
 def balance_text(acc: dict) -> str:
     plan = escape(acc["plan"])
     lines = [
-        "💰 <b>Баланс Ollama Cloud</b>",
+        "💰 <b>Аккаунт Ollama Cloud</b>",
         "",
-        f"Остаток: <b>${acc['balance']:.2f}</b>",
-        f"План: {plan}",
+        f"План: <b>{plan}</b>",
     ]
-    if acc.get("included") is not None:
-        lines.append(f"Включено в план: ${acc['included']:.2f}/мес")
-    if acc.get("extra") is not None:
-        lines.append(f"Extra usage: ${acc['extra']:.2f}")
-    if acc.get("used") is not None:
-        lines.append(f"Использовано в месяце: ${acc['used']:.2f}")
+    if acc.get("name"):
+        lines.append(f"Имя: {escape(acc['name'])}")
+    if acc.get("email"):
+        lines.append(f"Email: {escape(acc['email'])}")
+
+    # Баланс показываем, только если API его реально отдал (платные планы)
+    has_money = (
+        acc.get("included") is not None
+        or acc.get("extra") is not None
+        or acc.get("used") is not None
+        or acc["balance"] > 0
+    )
+    if has_money:
+        lines.append("")
+        lines.append(f"Остаток: <b>${acc['balance']:.2f}</b>")
+        if acc.get("included") is not None:
+            lines.append(f"Включено в план: ${acc['included']:.2f}/мес")
+        if acc.get("extra") is not None:
+            lines.append(f"Extra usage: ${acc['extra']:.2f}")
+        if acc.get("used") is not None:
+            lines.append(f"Использовано в месяце: ${acc['used']:.2f}")
+    else:
+        lines.append("")
+        lines.append(
+            "ℹ️ API не отдаёт баланс для текущего плана — "
+            f"расход «сегодня/месяц» недоступен. "
+            f"Проверьте вручную: https://ollama.com/settings/billing"
+        )
+
     if acc.get("renews_at"):
         lines.append(f"Обновление: {escape(acc['renews_at'])}")
     lines.append("\nПополнить: https://ollama.com/settings/billing")
@@ -296,17 +337,20 @@ def spend_text(state: dict, balance: float, period: str) -> str:
 
 def models_text(items: list) -> str:
     if not items:
-        return "🤖 <b>Cloud-модели Ollama</b>\n\nСписок пуст — проверьте API-ключ"
-
-    lines = [f"🤖 <b>Cloud-модели Ollama</b> — {len(items)} шт.\n"]
+        return (
+            "🤖 <b>Модели Ollama Cloud</b>\n\n"
+            "Модели не найдены. Проверьте OLLAMA_API_KEY или план на "
+            "https://ollama.com/settings"
+        )
+    lines = [f"🤖 <b>Модели Ollama Cloud</b> — {len(items)} шт.\n"]
     # Показываем первые 25, остальное — счётчик
     for m in items[:25]:
-        name = m.get("name", "?")
+        name = escape(m.get("name", "?"))
         size = m.get("size")
         ctx = m.get("context_length") or m.get("max_context")
         ctx_part = f" · ctx {ctx}" if ctx else ""
-        size_part = f" · {size / (1024**3):.1f} GB" if size else ""
-        lines.append(f"• <code>{escape(name)}</code>{size_part}{ctx_part}")
+        size_part = f" · {human_size(size)}" if size else ""
+        lines.append(f"• <code>{name}</code>{size_part}{ctx_part}")
     if len(items) > 25:
         lines.append(f"\n…и ещё {len(items) - 25} моделей")
     lines.append("\nПолный список: https://ollama.com/search?c=cloud")
@@ -337,10 +381,10 @@ def authorized(update: Update) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 <b>Ollama Cloud монитор</b>\n\n"
-        "💰 Баланс — текущий остаток\n"
+        "💰 Баланс — план и остаток (если API отдаёт)\n"
         "📅 Сегодня / 🗓 Месяц — расход за период\n"
-        "🤖 Модели — список cloud-моделей\n"
-        "⚠️ Уведомления при остатке ниже $5 / $2 / $1",
+        "🤖 Модели — список доступных моделей\n"
+        "⚠️ Уведомления при остатке ниже $5 / $2 / $1 (для платных планов)",
         parse_mode="HTML",
         reply_markup=get_main_menu(),
     )
@@ -373,6 +417,14 @@ async def show_spending(update: Update, context: ContextTypes.DEFAULT_TYPE, peri
     try:
         data = await asyncio.to_thread(fetch_account)
         acc = normalize_account(data)
+        if str(acc.get("plan", "")).lower() == "free":
+            await msg.edit_text(
+                "ℹ️ План <b>free</b> — API Ollama не отдаёт баланс/расход, "
+                "поэтому посчитать нечего.\n"
+                "Проверьте вручную: https://ollama.com/settings/billing",
+                parse_mode="HTML",
+            )
+            return
         state = load_state()
         update_snapshots(state, acc["balance"])
         save_state(state)
@@ -431,6 +483,15 @@ async def check_balance_job(context: ContextTypes.DEFAULT_TYPE):
     balance = acc["balance"]
     state = load_state()
     update_snapshots(state, balance)
+
+    # На бесплатном плане API не отдаёт баланс — алерты не отправляем,
+    # только фиксируем замер (на случай перехода на платный план).
+    if str(acc.get("plan", "")).lower() == "free":
+        state["last_balance"] = balance
+        state["last_plan"] = acc["plan"]
+        state["last_check"] = datetime.now(TZ).isoformat(timespec="seconds")
+        save_state(state)
+        return
 
     alerted = set(state.get("alerted", []))
     if balance >= max(ALERT_THRESHOLDS):

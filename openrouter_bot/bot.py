@@ -375,7 +375,7 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None, free
     else:
         used_models_sorted = sorted(
             [(m, _get_model_price(m, models)) for m in used_models],
-            key=lambda x: x[1]["input"] if x[1] else float("inf")
+            key=lambda x: (x[1]["input"], x[1]["output"]) if x[1] else (float("inf"), float("inf"))
         )
         for model_id, price_info in used_models_sorted[:10]:
             name = model_id.split("/")[-1][:30]

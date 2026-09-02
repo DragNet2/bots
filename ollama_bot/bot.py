@@ -557,7 +557,11 @@ async def models_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _models_with_pricing() -> tuple:
-    """Модели + прайс (прайс берётся из кэша или парсится с сайта)."""
+    """Модели + прайс (прайс берётся из кэша или парсится с сайта).
+
+    Модели сортируются по цене вывода (по возрастанию), при равенстве —
+    по цене ввода; без цены — в конец списка.
+    """
     items = fetch_cloud_models()
     state = load_state()
     try:
@@ -566,6 +570,14 @@ def _models_with_pricing() -> tuple:
         # Прайс не критичен: показываем модели без цен
         log.warning("pricing error: %s", e)
         pricing = (state.get("pricing") or {}).get("models") or {}
+
+    def _sort_key(m: dict):
+        p = _price_for(pricing, m.get("name", ""))
+        if p and p.get("out") is not None:
+            return (0, p.get("out") or 0.0, p.get("in") if p.get("in") is not None else float("inf"))
+        return (1, 0.0, 0.0)
+
+    items.sort(key=_sort_key)
     return items, pricing
 
 

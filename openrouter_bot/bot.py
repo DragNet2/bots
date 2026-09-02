@@ -287,14 +287,36 @@ def fetch_rankings() -> dict | None:
         return None
 
 
+def track_topup(state: dict, credits: dict) -> None:
+    """Фиксирует пополнение, если total_credits вырос с прошлой проверки."""
+    prev = state.get("credits_total")
+    now_total = credits["total_credits"]
+    if prev is None:
+        state["credits_total"] = now_total
+        return
+    delta = now_total - float(prev)
+    if delta > 0.005:
+        state["last_topup_amount"] = round(delta, 2)
+        state["last_topup_at"] = datetime.now(TZ).isoformat(timespec="seconds")
+    state["credits_total"] = now_total
+
+
 # ----------------------------- тексты сообщений -----------------------------
 
-def balance_text(credits: dict) -> str:
+def balance_text(credits: dict, state: dict) -> str:
+    amount = state.get("last_topup_amount")
+    at = state.get("last_topup_at")
+    if amount is not None and at:
+        topup_date = datetime.fromisoformat(at).strftime("%d.%m.%Y")
+        topup_line = f"Последнее пополнение: <b>${amount:g}</b>\nПополнился: {topup_date}\n"
+    else:
+        topup_line = "Последнее пополнение: —\nПополнился: —\n"
     return (
         "💰 <b>Баланс OpenRouter</b>\n\n"
-        f"Остаток: <b>${credits['balance']:.2f}</b>\n"
-        f"Пополнено всего: ${credits['total_credits']:.2f}\n"
-        f"Израсходовано всего: ${credits['total_usage']:.2f}"
+        f"{topup_line}"
+        f"Остаток (сейчас): <b>${credits['balance']:.2f}</b>\n\n"
+        f"Всего пополнено: ${credits['total_credits']:.2f}\n"
+        f"Израсходовано за все время: ${credits['total_usage']:.2f}"
     )
 
 
@@ -375,7 +397,7 @@ def prices_text(models: list, used_models: set, rankings_data: dict | None, free
     else:
         used_models_sorted = sorted(
             [(m, _get_model_price(m, models)) for m in used_models],
-            key=lambda x: (x[1]["input"], x[1]["output"]) if x[1] else (float("inf"), float("inf"))
+            key=lambda x: x[1]["input"] if x[1] else float("inf")
         )
         for model_id, price_info in used_models_sorted[:10]:
             name = model_id.split("/")[-1][:30]
@@ -485,9 +507,10 @@ async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         credits = await asyncio.to_thread(fetch_credits)
         state = load_state()
         update_snapshots(state, credits["balance"])
+        track_topup(state, credits)
         state["last_balance"] = credits["balance"]
         save_state(state)
-        await msg.edit_text(balance_text(credits), parse_mode="HTML")
+        await msg.edit_text(balance_text(credits, state), parse_mode="HTML")
     except Exception as e:
         log.warning("balance error: %s", e)
         await msg.edit_text(f"❌ Ошибка OpenRouter API: {escape(str(e))[:300]}")
@@ -597,6 +620,7 @@ async def check_balance_job(context: ContextTypes.DEFAULT_TYPE):
     balance = credits["balance"]
     state = load_state()
     update_snapshots(state, balance)
+    track_topup(state, credits)
 
     alerted = set(state.get("alerted", []))
     if balance >= max(ALERT_THRESHOLDS):

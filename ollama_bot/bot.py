@@ -441,7 +441,7 @@ def models_text(items: list, pricing: dict | None = None) -> str:
                 else "—"
             )
             lines.append(
-                f"• <code>{name}</code> · ↑ $<b>{pin}</b> // ↓ $<b>{pout}</b>"
+                f"• <code>{name}</code> · ↑ <b>{pin}</b> // ↓ <b>{pout}</b>"
             )
         else:
             lines.append(f"• <code>{name}</code>")

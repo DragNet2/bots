@@ -128,14 +128,6 @@ class AccountUnavailable(Exception):
     """Эндпоинт /api/me недоступен или вернул неожиданный формат."""
 
 
-def human_size(num_bytes: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if num_bytes < 1024:
-            return f"{num_bytes:.1f} {unit}" if unit != "B" else f"{num_bytes} B"
-        num_bytes /= 1024
-    return f"{num_bytes:.1f} PB"
-
-
 def fetch_account() -> dict:
     """Информация об аккаунте Ollama Cloud.
 
@@ -435,16 +427,14 @@ def models_text(items: list, pricing: dict | None = None) -> str:
     lines = [f"🤖 <b>Модели Ollama Cloud</b> — {len(items)} шт."]
     if have_prices:
         lines.append(
-            "<i>Цены $ за 1M токенов: ↗️ вход / ↘️ выход</i>\n"
+            "<i>Цены $ за 1M токенов: ↑ вход / ↓ выход</i>\n"
         )
     else:
         lines.append("")
     # Показываем первые 25, остальное — счётчик (одна строка на модель)
     for m in items[:25]:
         name = escape(m.get("name", "?"))
-        size = m.get("size")
         p = _price_for(pricing, m.get("name", ""))
-        parts = []
         if p and (p.get("in") is not None or p.get("out") is not None):
             pin = f"{p['in']:.2f}".rstrip("0").rstrip(".") if p.get("in") else "—"
             pout = (
@@ -452,11 +442,9 @@ def models_text(items: list, pricing: dict | None = None) -> str:
                 if p.get("out")
                 else "—"
             )
-            parts.append(f"↗️ ${pin} ↘️ ${pout}")
-        if size:
-            parts.append(human_size(size))
-        tail = f" · {' || '.join(parts)}" if parts else ""
-        lines.append(f"• <code>{name}</code><i>{tail}</i>")
+            lines.append(f"• <code>{name}</code> · ↑ ${pin} // ↓ ${pout}")
+        else:
+            lines.append(f"• <code>{name}</code>")
     if len(items) > 25:
         lines.append(f"\n…и ещё {len(items) - 25} моделей")
     lines.append("\nПолный список: https://ollama.com/search?c=cloud")

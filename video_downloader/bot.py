@@ -665,13 +665,17 @@ async def upload_worker():
                         except Exception:
                             pass
 
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск...",
-                    parse_mode="HTML"
-                )
-                last_message_text[msg_key] = None  # Reset after edit
+                upload_text = f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск..."
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=upload_text,
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass  # Message may already show this text ("message is not modified")
+                last_message_text[msg_key] = upload_text  # Reset after edit
 
                 success = await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress)
 

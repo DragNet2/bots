@@ -52,19 +52,34 @@ class YandexDisk:
                         logger.error("No upload URL in response")
                         return False
                 
-                # Read file and upload
-                with open(file_path, "rb") as f:
-                    file_data = f.read()
-                
-                # Upload with progress tracking
-                uploaded = 0
+                # Stream file in chunks to avoid loading it fully into memory
                 chunk_size = 1024 * 1024  # 1MB chunks
-                
-                async with session.put(upload_url, data=file_data) as resp:
+
+                async def file_sender():
+                    uploaded = 0
+                    with open(file_path, "rb") as f:
+                        while True:
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            uploaded += len(chunk)
+                            if progress_callback:
+                                result = progress_callback(uploaded, file_size)
+                                if asyncio.iscoroutine(result):
+                                    await result
+                            yield chunk
+
+                async with session.put(
+                    upload_url,
+                    data=file_sender(),
+                    headers={"Content-Length": str(file_size)},
+                ) as resp:
                     if resp.status in (200, 201):
                         logger.info(f"Uploaded {os.path.basename(file_path)} to Yandex Disk")
                         if progress_callback:
-                            progress_callback(file_size, file_size)  # Complete
+                            result = progress_callback(file_size, file_size)
+                            if asyncio.iscoroutine(result):
+                                await result
                         return True
                     else:
                         error = await resp.text()

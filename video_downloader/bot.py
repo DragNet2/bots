@@ -1170,14 +1170,33 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             if yandex and user_settings["destination"] == DEST_YADISK:
                 try:
                     await yandex.create_folder(YADISK_FOLDER)
-                    disk_path = f"{YADISK_FOLDER}/{re.sub(r'[^\w\s\-\.]', '_', torrent_name)[:100]}"
+
+                    # Keep original filename (cleaned) so extension is preserved
+                    base, ext = os.path.splitext(final_file)
+                    send_file_name = f"{re.sub(r'[^\w\s\-\.]', '_', base)[:100]}{ext}"
+                    disk_path = f"{YADISK_FOLDER}/{send_file_name}"
+
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
                         text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n☁️ Загружаю на Яндекс.Диск...",
                         parse_mode="HTML"
                     )
-                    success = await yandex.upload_file(os.path.join(download_dir, final_file), disk_path)
+
+                    async def upload_progress(loaded, total):
+                        percent = min(100, (loaded / total) * 100) if total > 0 else 0
+                        bar = progress_bar(percent, 100)
+                        try:
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n☁️ Загружаю на Яндекс.Диск...\n{bar}",
+                                parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+
+                    success = await yandex.upload_file(os.path.join(download_dir, final_file), disk_path, progress_callback=upload_progress)
                     if success:
                         await bot.edit_message_text(
                             chat_id=chat_id,

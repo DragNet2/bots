@@ -602,6 +602,11 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 if success and os.path.exists(transcoded_path):
                     file_to_send = transcoded_path
                 else:
+                    # Transcode failed - fallback: upload original to Yandex Disk if too big for chat
+                    if yandex and file_size > 1.9 * 1024 * 1024 * 1024:
+                        prefix = f"{escape(video_title)}\n\n{video_link}\n\n⚠️ Перекодирование не удалось — файл ({format_size(file_size)}) слишком большой для чата"
+                        await upload_to_yadisk(chat_id, message_id, video_title, temp_path, prefix)
+                        return
                     raise Exception("Transcoding failed")
 
             # Upload to Yandex Disk (non-blocking - queue for background)
@@ -681,6 +686,69 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 pass
 
     is_downloading = False
+
+
+async def upload_to_yadisk(chat_id: int, message_id: int, title: str, file_path: str, prefix: str = ""):
+    """Upload a file to Yandex Disk with progress messages.
+
+    Args:
+        prefix: Text shown before the progress bar (e.g. reason for fallback).
+    Returns:
+        disk_path on success, None on failure.
+    """
+    try:
+        await yandex.create_folder(YADISK_FOLDER)
+
+        base, ext = os.path.splitext(os.path.basename(file_path))
+        send_file_name = f"{re.sub(r'[^\w\s\-\.]', '_', base)[:100]}{ext}"
+        disk_path = f"{YADISK_FOLDER}/{send_file_name}"
+
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"{prefix}\n\n☁️ Загружаю на Яндекс.Диск...",
+            parse_mode="HTML"
+        )
+
+        async def upload_progress(loaded, total):
+            percent = min(100, (loaded / total) * 100) if total > 0 else 0
+            bar = progress_bar(percent, 100)
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"{prefix}\n\n☁️ Загружаю на Яндекс.Диск...\n{bar}",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+        if await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress):
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{prefix}\n\n✅ Загружено на Яндекс.Диск!\n📁 {disk_path}",
+                parse_mode="HTML"
+            )
+            return disk_path
+
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"{prefix}\n\n❌ Ошибка загрузки на Яндекс.Диск",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Yadisk upload error: {e}")
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{prefix}\n\n❌ Ошибка: {e}"
+            )
+        except Exception:
+            pass
+    return None
 
 
 async def upload_worker():
@@ -1168,57 +1236,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
             # Yandex Disk destination: upload there instead of sending to chat
             if yandex and user_settings["destination"] == DEST_YADISK:
-                try:
-                    await yandex.create_folder(YADISK_FOLDER)
-
-                    # Keep original filename (cleaned) so extension is preserved
-                    base, ext = os.path.splitext(final_file)
-                    send_file_name = f"{re.sub(r'[^\w\s\-\.]', '_', base)[:100]}{ext}"
-                    disk_path = f"{YADISK_FOLDER}/{send_file_name}"
-
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n☁️ Загружаю на Яндекс.Диск...",
-                        parse_mode="HTML"
-                    )
-
-                    async def upload_progress(loaded, total):
-                        percent = min(100, (loaded / total) * 100) if total > 0 else 0
-                        bar = progress_bar(percent, 100)
-                        try:
-                            await bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=message_id,
-                                text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n☁️ Загружаю на Яндекс.Диск...\n{bar}",
-                                parse_mode="HTML"
-                            )
-                        except Exception:
-                            pass
-
-                    success = await yandex.upload_file(os.path.join(download_dir, final_file), disk_path, progress_callback=upload_progress)
-                    if success:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загружено на Яндекс.Диск!\n📁 {disk_path}",
-                            parse_mode="HTML"
-                        )
-                    else:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n❌ Ошибка загрузки на Яндекс.Диск",
-                            parse_mode="HTML"
-                        )
-                except Exception as e:
-                    logger.error(f"Yadisk upload error: {e}")
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=f"❌ Ошибка: {e}"
-                    )
-                finally:
+                prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})"
+                if await upload_to_yadisk(chat_id, message_id, torrent_name, os.path.join(download_dir, final_file), prefix):
                     # Cleanup download dir
                     try:
                         import shutil
@@ -1335,15 +1354,28 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             text=f"❌ Ошибка перекодирования.",
                             parse_mode="HTML"
                         )
+                        # Fallback: upload original to Yandex Disk
+                        if yandex:
+                            prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n⚠️ Перекодирование не удалось — оригинал ({format_size(final_size)}) слишком большой для чата"
+                            if await upload_to_yadisk(chat_id, message_id, torrent_name, final_path, prefix):
+                                try:
+                                    shutil.rmtree(download_dir, ignore_errors=True)
+                                except:
+                                    pass
                 else:
                     # Non-video file: send as document only if it fits the 50MB limit
                     if final_size > 50 * 1024 * 1024:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text=f"⚠️ Файл не видео ({escape(final_file)}, {format_size(final_size)}) и превышает лимит Telegram 50MB для документов — отправить не могу.\n\n💡 Включи в /settings загрузку на Яндекс.Диск.",
-                            parse_mode="HTML"
-                        )
+                        # Too big for Telegram - auto-upload to Yandex Disk
+                        if yandex:
+                            prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n⚠️ Файл не видео ({escape(final_file)}, {format_size(final_size)}) и превышает лимит Telegram 50MB для документов"
+                            await upload_to_yadisk(chat_id, message_id, torrent_name, final_path, prefix)
+                        else:
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                text=f"⚠️ Файл не видео ({escape(final_file)}, {format_size(final_size)}) и превышает лимит Telegram 50MB для документов.\n\n💡 Настройте YANDEX_TOKEN для автозагрузки на Яндекс.Диск.",
+                                parse_mode="HTML"
+                            )
                     else:
                         await bot.send_document(
                             chat_id=chat_id,

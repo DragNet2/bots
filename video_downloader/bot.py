@@ -269,6 +269,28 @@ async def download_hls_video(m3u8_url: str, output_path: str, progress_callback)
     return return_code == 0
 
 
+def _yt_dlp_info(url: str) -> dict | None:
+    """Get video info (title + direct URL) via yt-dlp --dump-json."""
+    venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
+    yt_dlp_path = f"{venv_bin}/yt-dlp"
+    cmd = [yt_dlp_path, "--dump-json", "--no-playlist"]
+    if YT_PROXY:
+        cmd.extend(["--proxy", YT_PROXY])
+    cmd.append(url)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout.strip().splitlines()[0])
+            return {
+                "title": data.get("title", "Без названия"),
+                # Direct media URL when available, otherwise page URL for yt-dlp download
+                "url": data.get("url") or data.get("webpage_url") or url,
+            }
+    except Exception as e:
+        logger.error(f"yt-dlp info failed: {e}")
+    return None
+
+
 async def get_video_info_from_url(url: str):
     """Extract video info from various video hosting sites."""
     import re
@@ -380,8 +402,16 @@ async def get_video_info_from_url(url: str):
         except Exception as e:
             logger.error(f"Failed to extract from sex.spreee.name: {e}")
 
-    # ukdevilz.com, noodlemagazine.com - use direct video extraction
+    # ukdevilz.com, noodlemagazine.com - via yt-dlp (extractor handles Cloudflare)
     if 'ukdevilz.com' in url_lower or 'noodlemagazine.com' in url_lower:
+        try:
+            info = await _yt_dlp_info(url)
+            if info and info.get("url"):
+                return info
+        except Exception as e:
+            logger.error(f"yt-dlp extraction failed for ukdevilz/noodlemagazine: {e}")
+
+        # Fallback: direct HTML parsing (works when Cloudflare is not triggered)
         try:
             import subprocess
             result = subprocess.run(

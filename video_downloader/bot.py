@@ -411,6 +411,8 @@ async def get_video_info_from_url(url: str):
         try:
             info = await _yt_dlp_info(url)
             if info and info.get("url"):
+                # Keep original page URL for display; signed CDN URL expires quickly
+                info["page_url"] = url
                 return info
         except Exception as e:
             logger.error(f"yt-dlp extraction failed for ukdevilz/noodlemagazine: {e}")
@@ -522,7 +524,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
 
         video_title = video_info.get("title", "Без названия")
         video_url = video_info["url"]
-        video_link = f'<a href="{escape(video_url)}">🔗 Ссылка на видео</a>'
+        display_url = video_info.get("page_url") or video_url
+        video_link = f'<a href="{escape(display_url)}">🔗 Ссылка на видео</a>'
         is_hls = video_info.get("is_hls", False)
 
         async def on_progress(downloaded, total, current_bytes, total_bytes):

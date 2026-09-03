@@ -992,7 +992,6 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     if "Total Length:" in line:
                         size_str = line.split("Total Length:")[1].strip()
                         # Format: "1.4GiB (1,567,434,752)" or "1,567,434,752"
-                        import re
                         # Try to find bytes in parentheses first: (1,567,434,752)
                         match = re.search(r'\(([\d,]+)\)', size_str)
                         if match:

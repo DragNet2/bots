@@ -1165,6 +1165,49 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
         if final_file and final_size > 0 and aria2_exit_code == 0 and (total_size == 0 or abs(final_size - total_size) < 1024*1024):
             logger.info(f"Starting file processing: {final_file}, size={final_size}")
+
+            # Yandex Disk destination: upload there instead of sending to chat
+            if yandex and user_settings["destination"] == DEST_YADISK:
+                try:
+                    await yandex.create_folder(YADISK_FOLDER)
+                    disk_path = f"{YADISK_FOLDER}/{re.sub(r'[^\w\s\-\.]', '_', torrent_name)[:100]}"
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n☁️ Загружаю на Яндекс.Диск...",
+                        parse_mode="HTML"
+                    )
+                    success = await yandex.upload_file(os.path.join(download_dir, final_file), disk_path)
+                    if success:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загружено на Яндекс.Диск!\n📁 {disk_path}",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n❌ Ошибка загрузки на Яндекс.Диск",
+                            parse_mode="HTML"
+                        )
+                except Exception as e:
+                    logger.error(f"Yadisk upload error: {e}")
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"❌ Ошибка: {e}"
+                    )
+                finally:
+                    # Cleanup download dir
+                    try:
+                        import shutil
+                        shutil.rmtree(download_dir, ignore_errors=True)
+                    except:
+                        pass
+                return
+
             is_avi = final_file.lower().endswith(".avi")
             is_mp4 = final_file.lower().endswith(".mp4")
             is_streamable = any(final_file.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".flv"])
@@ -1274,12 +1317,12 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             parse_mode="HTML"
                         )
                 else:
-                    # Send as document - use file path for streaming (max 50MB)
+                    # Non-video file: send as document only if it fits the 50MB limit
                     if final_size > 50 * 1024 * 1024:
                         await bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=message_id,
-                            text=f"❌ Файл слишком большой для отправки как документ ({format_size(final_size)}).",
+                            text=f"⚠️ Файл не видео ({escape(final_file)}, {format_size(final_size)}) и превышает лимит Telegram 50MB для документов — отправить не могу.\n\n💡 Включи в /settings загрузку на Яндекс.Диск.",
                             parse_mode="HTML"
                         )
                     else:
@@ -1287,16 +1330,12 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             chat_id=chat_id,
                             document=types.FSInputFile(final_path)
                         )
-                
-                try:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n✅ Отправлено!",
-                        parse_mode="HTML"
-                    )
-                except:
-                    pass
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n✅ Отправлено!",
+                            parse_mode="HTML"
+                        )
             except Exception as e:
                 logger.error(f"Failed to send file: {e}")
                 try:

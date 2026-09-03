@@ -126,8 +126,13 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
     venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
     yt_dlp_path = f"{venv_bin}/yt-dlp"
 
+    cmd = [yt_dlp_path, "-c", "-f", "best[ext=mp4]/best"]
+    if YT_PROXY:
+        cmd.extend(["--proxy", YT_PROXY])
+    cmd.extend(["-o", output_path, url])
+
     process = subprocess.Popen(
-        [yt_dlp_path, "-c", "-f", "best[ext=mp4]/best", "-o", output_path, url],
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -1233,7 +1238,7 @@ async def cmd_start(message: types.Message):
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     await message.answer(
-        "📹 <b>Видео:</b> отправь ссылку на видео (VK, sex.spreee, 36ebalka и др.)\n"
+        "📹 <b>Видео:</b> отправь ссылку на видео (YouTube, VK, sex.spreee, 36ebalka и др.)\n"
         "📥 <b>Торренты:</b> отправь ссылку Rutracker или magnet\n\n"
         "Команды:\n"
         "/queue — статус очереди\n"
@@ -1353,7 +1358,8 @@ async def handle_message(message: types.Message):
         "vk.com", "vkvideo.ru", "vk.ru",
         "ukdevilz.com", "noodlemagazine.com",
         "sex.spreee.name", "36ebalka.ru",
-        "embed-player.space", "pornhub.com"
+        "embed-player.space", "pornhub.com",
+        "youtube.com", "youtu.be"
     ])
     if not is_video_url and not is_torrent_url(text):
         await message.answer("Отправьте ссылку на видео из ВКонтакте или торрент.")

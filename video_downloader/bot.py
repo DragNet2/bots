@@ -128,7 +128,11 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
     venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
     yt_dlp_path = f"{venv_bin}/yt-dlp"
 
-    cmd = [yt_dlp_path, "-c", "-f", "best[ext=mp4]/best"]
+    cmd = [
+        yt_dlp_path, "-c",
+        "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+        "--merge-output-format", "mp4",
+    ]
     if YT_PROXY:
         cmd.extend(["--proxy", YT_PROXY])
     cmd.extend(["-o", output_path, url])

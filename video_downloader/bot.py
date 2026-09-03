@@ -1,11 +1,12 @@
 import asyncio
+import json
 import logging
 import os
 import re
 import subprocess
 import uuid
 from html import escape
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
@@ -41,6 +42,54 @@ active_torrents = {}  # task_id -> {name, size, status, download_dir, chat_id, m
 # Torrent download directory
 TORRENT_DIR = "/tmp/torrents"
 os.makedirs(TORRENT_DIR, exist_ok=True)
+
+# ====== BOT SETTINGS ======
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_settings.json")
+
+# Destination for downloaded videos
+DEST_CHAT = "chat"
+DEST_YADISK = "yadisk"
+
+# Maximum video quality (height in px, yt-dlp format height filter)
+QUALITY_LABELS = {
+    2160: "4K",
+    1440: "2K",
+    1080: "1080",
+    720: "720",
+}
+
+user_settings = {
+    "destination": DEST_YADISK if yandex else DEST_CHAT,
+    "quality": 2160,  # maximum by default
+}
+
+
+def load_settings():
+    """Load settings from file."""
+    global user_settings
+    try:
+        with open(SETTINGS_FILE, "r") as f:
+            data = json.load(f)
+            if data.get("destination") in (DEST_CHAT, DEST_YADISK):
+                user_settings["destination"] = data["destination"]
+            if data.get("quality") in QUALITY_LABELS:
+                user_settings["quality"] = data["quality"]
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning(f"Could not load settings: {e}")
+
+
+def save_settings():
+    """Save settings to file."""
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(user_settings, f)
+    except Exception as e:
+        logger.error(f"Could not save settings: {e}")
+
+
+load_settings()
 
 
 def progress_bar(current: float, total: float, width: int = 20) -> str:
@@ -130,7 +179,9 @@ async def download_with_progress(url: str, output_path: str, progress_callback):
 
     cmd = [
         yt_dlp_path, "-c",
-        "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+        "-f", f"bv*[ext=mp4][height<={user_settings['quality']}]+ba[ext=m4a]/"
+              f"b[ext=mp4][height<={user_settings['quality']}]/"
+              f"bv*[height<={user_settings['quality']}]+ba/b",
         "--merge-output-format", "mp4",
     ]
     if YT_PROXY:
@@ -553,7 +604,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     raise Exception("Transcoding failed")
 
             # Upload to Yandex Disk (non-blocking - queue for background)
-            if yandex:
+            if yandex and user_settings["destination"] == DEST_YADISK:
                 # Create folder if needed
                 await yandex.create_folder(YADISK_FOLDER)
 
@@ -580,25 +631,24 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 # Don't delete temp_path here - upload worker will do it
                 return  # Exit early to allow next download to start
 
-            else:
-                # Send to chat if no Yandex Disk configured
-                await bot.edit_message_text(
+            # Send to chat
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{escape(video_title)}\n\n{video_link}\n\n⏫ Загружаю в чат...",
+                parse_mode="HTML"
+            )
+            with open(file_to_send, "rb") as video_file:
+                await bot.send_video(
                     chat_id=chat_id,
-                    message_id=message_id,
-                    text=f"{escape(video_title)}\n\n{video_link}\n\n⏫ Загружаю в чат...",
-                    parse_mode="HTML"
+                    video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
                 )
-                with open(file_to_send, "rb") as video_file:
-                    await bot.send_video(
-                        chat_id=chat_id,
-                        video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
-                    )
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загрузка в чат завершена!",
-                    parse_mode="HTML"
-                )
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загрузка в чат завершена!",
+                parse_mode="HTML"
+            )
 
         except Exception as e:
             logger.error(f"Error sending video: {e}")
@@ -1235,6 +1285,55 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             logger.info(f"Removed torrent {task_id} from active_torrents")
 
 
+def settings_keyboard() -> InlineKeyboardMarkup:
+    """Build settings inline keyboard."""
+    dest = user_settings["destination"]
+    quality = user_settings["quality"]
+
+    dest_btn = InlineKeyboardButton(
+        text=f"📥 Куда загружать: {'Чат' if dest == DEST_CHAT else 'Я.Диск'}",
+        callback_data="set_dest",
+    )
+    quality_btn = InlineKeyboardButton(
+        text=f"🎚 Разрешение (макс.): {QUALITY_LABELS[quality]}",
+        callback_data="set_quality",
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[[dest_btn], [quality_btn]])
+
+
+@dp.message(Command("settings"))
+async def cmd_settings(message: types.Message):
+    """Show bot settings."""
+    if user_settings["destination"] == DEST_YADISK and not yandex:
+        await message.answer("❌ Яндекс.Диск не настроен (YANDEX_TOKEN). Загрузка в чат.")
+        return
+    await message.answer("⚙️ <b>Настройки бота</b>", parse_mode="HTML", reply_markup=settings_keyboard())
+
+
+@dp.callback_query(F.data == "set_dest")
+async def cb_set_dest(callback: types.CallbackQuery):
+    """Cycle download destination: chat <-> yadisk."""
+    if not yandex:
+        await callback.answer("❌ Яндекс.Диск не настроен (YANDEX_TOKEN)", show_alert=True)
+        return
+    user_settings["destination"] = DEST_CHAT if user_settings["destination"] == DEST_YADISK else DEST_YADISK
+    save_settings()
+    await callback.message.edit_reply_markup(reply_markup=settings_keyboard())
+    dest_label = "Я.Диск" if user_settings["destination"] == DEST_YADISK else "Чат"
+    await callback.answer(f"Куда загружать: {dest_label}")
+
+
+@dp.callback_query(F.data == "set_quality")
+async def cb_set_quality(callback: types.CallbackQuery):
+    """Cycle max quality: 4K -> 2K -> 1080 -> 720 -> 4K."""
+    heights = list(QUALITY_LABELS.keys())  # [2160, 1440, 1080, 720]
+    idx = heights.index(user_settings["quality"])
+    user_settings["quality"] = heights[(idx + 1) % len(heights)]
+    save_settings()
+    await callback.message.edit_reply_markup(reply_markup=settings_keyboard())
+    await callback.answer(f"Макс. разрешение: {QUALITY_LABELS[user_settings['quality']]}")
+
+
 @dp.message(Command("yadisk"))
 async def cmd_yadisk(message: types.Message):
     """Check Yandex Disk status or upload files."""
@@ -1279,11 +1378,13 @@ async def cmd_start(message: types.Message):
     await message.answer(
         "Привет! Отправь мне ссылку на видео, и я перешлю его тебе.\n\n"
         "Поддерживаются:\n"
+        "• YouTube (включая Shorts)\n"
         "• VK видео\n"
         "• sex.spreee.name\n"
         "• 36ebalka.ru\n"
         "• noodlemagazine.com\n"
         "• Торренты (Rutracker, magnet)\n\n"
+        "Команда /settings — куда загружать и макс. разрешение.\n"
         "Можно отправлять несколько ссылок — они будут обработаны по очереди."
     )
 
@@ -1294,6 +1395,7 @@ async def cmd_help(message: types.Message):
         "📹 <b>Видео:</b> отправь ссылку на видео (YouTube, VK, sex.spreee, 36ebalka и др.)\n"
         "📥 <b>Торренты:</b> отправь ссылку Rutracker или magnet\n\n"
         "Команды:\n"
+        "/settings — куда загружать и макс. разрешение\n"
         "/queue — статус очереди\n"
         "/torrents — активные загрузки",
         parse_mode="HTML"

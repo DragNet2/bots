@@ -724,11 +724,19 @@ async def upload_to_yadisk(chat_id: int, message_id: int, title: str, file_path:
                 pass
 
         if await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress):
+            # Publish file and get public URL
+            public_url = await yandex.publish_file(disk_path)
+            success_text = f"{prefix}\n\n✅ Загружено на Яндекс.Диск!\n📁 {disk_path}"
+            if public_url:
+                success_text += f"\n\n🔗 <a href=\"{escape(public_url)}\">Ссылка на файл</a>"
+            else:
+                success_text += "\n\n⚠️ Не удалось получить публичную ссылку"
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
-                text=f"{prefix}\n\n✅ Загружено на Яндекс.Диск!\n📁 {disk_path}",
-                parse_mode="HTML"
+                text=success_text,
+                parse_mode="HTML",
+                disable_web_page_preview=True
             )
             return disk_path
 
@@ -802,11 +810,19 @@ async def upload_worker():
                 success = await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress)
 
                 if success:
+                    # Publish file and get public URL
+                    public_url = await yandex.publish_file(disk_path)
+                    success_text = f"{escape(video_title)}\n\n{video_link}\n\n✅ Загружено на Яндекс.Диск!\n📁 {disk_path}"
+                    if public_url:
+                        success_text += f"\n\n🔗 <a href=\"{escape(public_url)}\">Ссылка на файл</a>"
+                    else:
+                        success_text += "\n\n⚠️ Не удалось получить публичную ссылку"
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
-                        text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загружено на Яндекс.Диск!\n📁 {YADISK_FOLDER}/{send_file_name}",
-                        parse_mode="HTML"
+                        text=success_text,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
                     )
                 else:
                     await bot.edit_message_text(

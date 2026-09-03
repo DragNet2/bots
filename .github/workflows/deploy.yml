@@ -112,8 +112,13 @@ jobs:
             git fetch origin main || { echo "ERROR: git fetch failed"; exit 1; }
             git reset --hard origin/main || { echo "ERROR: git reset failed"; exit 1; }
             if [ -f "requirements.txt" ]; then
-              echo "  -> pip install -r requirements.txt"
-              pip install -r requirements.txt || echo "WARN: pip returned non-zero, continuing"
+              if [ -x "venv/bin/pip" ]; then
+                echo "  -> venv/bin/pip install -r requirements.txt"
+                venv/bin/pip install -r requirements.txt || echo "WARN: venv pip failed, continuing"
+              else
+                echo "  -> pip install -r requirements.txt (system)"
+                pip install -r requirements.txt || echo "WARN: pip returned non-zero, continuing"
+              fi
             fi
             if [ -f "start.sh" ]; then
               echo "  -> bash start.sh"

@@ -338,7 +338,7 @@ async def get_video_info_from_url(url: str):
             logger.error(f"YouTube extraction failed: {e}")
 
     # VK video (various domains with VK video IDs)
-    vk_pattern = r'vk\.com|vk\.io|vk\.ru|userapi\.com|mp4upload\.com'
+    vk_pattern = r'vk\.com|vk\.io|vk\.ru|vkvideo\.|userapi\.com|mp4upload\.com'
     if re.search(vk_pattern, url_lower):
         return await vk.get_video_info(url)
 

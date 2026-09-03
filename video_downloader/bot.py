@@ -443,15 +443,29 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
             size_str = ""
             if total_bytes > 0:
                 size_str = f" ({format_size(current_bytes)} / {format_size(total_bytes)})"
+            text = f"{escape(video_title)}\n\n{video_link}\n\n⏬ Скачивание...\n{bar}{size_str}"
+            if on_progress.last_text == text:
+                return  # Telegram returns FloodError for identical edits
             try:
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text=f"{escape(video_title)}\n\n{video_link}\n\n⏬ Скачивание...\n{bar}{size_str}",
+                    text=text,
                     parse_mode="HTML"
                 )
-            except Exception:
-                pass
+                on_progress.last_text = text
+            except Exception as e:
+                msg = str(e)
+                if "retry after" in msg:
+                    try:
+                        delay = float(msg.split("retry after")[1].split()[0])
+                        await asyncio.sleep(delay + 1)
+                    except (ValueError, IndexError):
+                        await asyncio.sleep(10)
+                elif "message is not modified" not in msg:
+                    logger.warning(f"Progress edit failed: {msg}")
+
+        on_progress.last_text = None
 
         # Use video_url (not original url) for download, handle HLS separately
         if is_hls:
@@ -507,15 +521,21 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
 
                 async def transcode_progress(percent, total):
                     bar = progress_bar(percent, 100)
+                    text = f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование...\n{bar}"
+                    if transcode_progress.last_text == text:
+                        return
                     try:
                         await bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=message_id,
-                            text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование...\n{bar}",
+                            text=text,
                             parse_mode="HTML"
                         )
-                    except:
+                        transcode_progress.last_text = text
+                    except Exception:
                         pass
+
+                transcode_progress.last_text = None
 
                 await bot.edit_message_text(
                     chat_id=chat_id,
@@ -597,11 +617,14 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     pass
 
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error processing video: {e}")
 
     finally:
         if download_success and os.path.exists(temp_path):
-            os.remove(temp_path)
+            try:
+                os.remove(temp_path)
+            except:
+                pass
 
     is_downloading = False
 

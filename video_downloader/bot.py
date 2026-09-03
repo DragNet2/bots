@@ -269,7 +269,7 @@ async def download_hls_video(m3u8_url: str, output_path: str, progress_callback)
     return return_code == 0
 
 
-def _yt_dlp_info(url: str) -> dict | None:
+async def _yt_dlp_info(url: str) -> dict | None:
     """Get video info (title + direct URL) via yt-dlp --dump-json."""
     venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
     yt_dlp_path = f"{venv_bin}/yt-dlp"
@@ -277,18 +277,22 @@ def _yt_dlp_info(url: str) -> dict | None:
     if YT_PROXY:
         cmd.extend(["--proxy", YT_PROXY])
     cmd.append(url)
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode == 0 and result.stdout.strip():
-            data = json.loads(result.stdout.strip().splitlines()[0])
-            return {
-                "title": data.get("title", "Без названия"),
-                # Direct media URL when available, otherwise page URL for yt-dlp download
-                "url": data.get("url") or data.get("webpage_url") or url,
-            }
-    except Exception as e:
-        logger.error(f"yt-dlp info failed: {e}")
-    return None
+
+    def _run():
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and result.stdout.strip():
+                data = json.loads(result.stdout.strip().splitlines()[0])
+                return {
+                    "title": data.get("title", "Без названия"),
+                    # Direct media URL when available, otherwise page URL for yt-dlp download
+                    "url": data.get("url") or data.get("webpage_url") or url,
+                }
+        except Exception as e:
+            logger.error(f"yt-dlp info failed: {e}")
+        return None
+
+    return await asyncio.to_thread(_run)
 
 
 async def get_video_info_from_url(url: str):

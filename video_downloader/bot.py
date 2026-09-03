@@ -410,6 +410,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
     global is_downloading, bot
 
     download_success = False
+    queued_for_upload = False
     task_id = str(uuid.uuid4())[:8]
     temp_path = f"/tmp/vk_video_{task_id}.mp4"
 
@@ -573,6 +574,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
 
                 # Queue upload for background processing (file will be cleaned up by upload worker)
                 await upload_queue.put((chat_id, message_id, video_title, video_link, file_to_send, send_file_name))
+                queued_for_upload = True
 
                 # Download is complete, worker will handle upload
                 # Don't delete temp_path here - upload worker will do it
@@ -620,7 +622,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         logger.error(f"Error processing video: {e}")
 
     finally:
-        if download_success and os.path.exists(temp_path):
+        # If file was queued for Yandex Disk upload, upload worker owns the cleanup
+        if download_success and not queued_for_upload and os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
             except:

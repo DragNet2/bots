@@ -981,6 +981,7 @@ def is_torrent_url(url: str) -> bool:
     url_lower = url.lower()
     return any([
         "rutracker.org" in url_lower and ("dl.php" in url_lower or "viewtopic.php" in url_lower),
+        "rutor.info" in url_lower and "/download/" in url_lower,
         url_lower.endswith(".torrent"),
         url_lower.startswith("magnet:"),
     ])
@@ -995,6 +996,12 @@ def extract_rutracker_id(url: str) -> str | None:
     if match:
         return match.group(1)
     return None
+
+
+def extract_rutor_id(url: str) -> str | None:
+    """Extract torrent ID from rutor URL (e.g. d.rutor.info/download/323609)."""
+    match = re.search(r'/download/(\d+)', url)
+    return match.group(1) if match else None
 
 
 async def download_torrent(chat_id: int, message_id: int, url: str):
@@ -1056,6 +1063,38 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         text=f"❌ Не удалось скачать .torrent файл.\n\n{result.stderr[:300] if result.stderr else 'Unknown error'}",
                         parse_mode="HTML"
                     )
+                return
+
+            torrent_arg = torrent_path
+        elif "rutor.info" in url.lower():
+            # Rutor - direct .torrent download, no cookies needed
+            topic_id = extract_rutor_id(url)
+            if not topic_id:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="❌ Не удалось извлечь ID торрента из ссылки rutor."
+                )
+                return
+
+            # Normalize to the download endpoint (works for d.rutor.info/t/rutor.info links too)
+            download_url = f"https://d.rutor.info/download/{topic_id}"
+
+            # Use curl to download the .torrent file
+            curl_cmd = ["curl", "-s", "-L", "-o", torrent_path]
+            if os.path.exists(COOKIES_FILE):
+                curl_cmd.extend(["--cookie", COOKIES_FILE])
+            curl_cmd.append(download_url)
+
+            result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=60)
+
+            if result.returncode != 0 or not os.path.exists(torrent_path) or os.path.getsize(torrent_path) == 0:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"❌ Не удалось скачать .torrent файл с rutor.\n\n{result.stderr[:300] if result.stderr else 'Unknown error'}",
+                    parse_mode="HTML"
+                )
                 return
 
             torrent_arg = torrent_path
@@ -1638,7 +1677,7 @@ async def cmd_start(message: types.Message):
 async def cmd_help(message: types.Message):
     await message.answer(
         "📹 <b>Видео:</b> отправь ссылку на видео (YouTube, VK, sex.spreee, 36ebalka и др.)\n"
-        "📥 <b>Торренты:</b> отправь ссылку Rutracker или magnet\n\n"
+        "📥 <b>Торренты:</b> отправь ссылку Rutracker, Rutor или magnet\n\n"
         "Команды:\n"
         "/settings — куда загружать и макс. разрешение\n"
         "/queue — статус очереди\n"

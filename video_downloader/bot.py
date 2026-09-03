@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import subprocess
+import urllib.request
 import uuid
 from html import escape
 from aiogram import Bot, Dispatcher, F, types
@@ -1005,11 +1006,39 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             logger.error(f"Failed to get torrent size: {e}")
 
         # Start aria2c in background (for .torrent file or magnet URI directly)
+        # RPC enabled to query real progress (needed for magnets: size unknown until metadata is fetched)
+        rpc_port = 16800 + (int(task_id[:2], 16) % 200)
+        rpc_secret = uuid.uuid4().hex
         process = subprocess.Popen(
-            [aria2_path, "-d", download_dir, "--bt-stop-timeout=300", torrent_arg],
+            [
+                aria2_path, "-d", download_dir, "--bt-stop-timeout=300",
+                f"--enable-rpc --rpc-listen-port={rpc_port} --rpc-secret={rpc_secret}",
+                "--bt-metadata-only=false", torrent_arg,
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+
+        def aria2_rpc_status():
+            """Query aria2 RPC for active download stats."""
+            try:
+                payload = json.dumps({
+                    "jsonrpc": "2.0", "id": "t", "method": "aria2.tellActive",
+                    "params": [f"token:{rpc_secret}"],
+                }).encode()
+                req = urllib.request.Request(f"http://127.0.0.1:{rpc_port}/jsonrpc", data=payload)
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    data = json.loads(resp.read())
+                jobs = data.get("result", [])
+                if not jobs:
+                    return None
+                j = jobs[0]
+                total = int(j.get("totalLength", "0"))
+                done = int(j.get("completedLength", "0"))
+                speed = int(j.get("downloadSpeed", "0"))
+                return {"total": total, "done": done, "speed": speed}
+            except Exception:
+                return None
 
         # Wait and check first progress
         await asyncio.sleep(5)
@@ -1039,15 +1068,26 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 logger.info(f"Torrent download timed out after {max_wait}s")
                 break
 
-            # Find downloaded file and current size
-            current_size = 0
-            try:
-                for f in os.listdir(download_dir):
-                    fpath = os.path.join(download_dir, f)
-                    if os.path.isfile(fpath):
-                        current_size += os.path.getsize(fpath)
-            except:
-                pass
+            # Real progress from aria2 RPC (works for magnets once metadata is fetched)
+            rpc = aria2_rpc_status()
+            if rpc:
+                if rpc["total"] > 0:
+                    total_size = rpc["total"]
+                    current_size = rpc["done"]
+                else:
+                    current_size = rpc["done"]
+                download_speed = rpc["speed"]
+            else:
+                # Fallback: sum files on disk (aria2 pre-allocates, so this is approximate)
+                current_size = 0
+                try:
+                    for f in os.listdir(download_dir):
+                        fpath = os.path.join(download_dir, f)
+                        if os.path.isfile(fpath):
+                            current_size += os.path.getsize(fpath)
+                except:
+                    pass
+                download_speed = 0
 
             # Check if process finished
             if process.poll() is not None:
@@ -1086,8 +1126,14 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
             # Update message every 10 seconds
             if asyncio.get_event_loop().time() - last_update > 10 or last_update == 0:
-                bar = progress_bar(current_size, total_size) if total_size > 0 else "⏳"
-                size_str = f" ({format_size(current_size)} / {format_size(total_size)})" if total_size > 0 else f" ({format_size(current_size)})"
+                if total_size > 0:
+                    bar = progress_bar(current_size, total_size)
+                    size_str = f" ({format_size(current_size)} / {format_size(total_size)})"
+                else:
+                    # Metadata not fetched yet (magnet via DHT) - show downloaded bytes and speed
+                    bar = "⏳ Получение метаданных..."
+                    speed_part = f" • ⬇ {format_size(download_speed)}/с" if download_speed > 0 else ""
+                    size_str = f" ({format_size(current_size)}{speed_part})"
                 try:
                     await bot.edit_message_text(
                         chat_id=chat_id,

@@ -849,10 +849,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
     try:
         # Determine torrent type and get file
         if url.lower().startswith("magnet:"):
-            # Magnet link - save to file
-            with open(torrent_path.replace(".torrent", ".magnet"), "w") as f:
-                f.write(url)
-            torrent_arg = torrent_path.replace(".torrent", ".magnet")
+            # Magnet link - aria2c accepts the URI directly (no .torrent file)
+            torrent_arg = url
         elif "rutracker.org" in url.lower():
             # Rutracker - need to download .torrent file
             topic_id = extract_rutracker_id(url)
@@ -928,6 +926,14 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         magnet_uri = None
         torrent_name = f"Торрент #{task_id}"
 
+        # For magnet links the URI is already known (from user input)
+        if url.lower().startswith("magnet:"):
+            magnet_uri = url
+            dn_match = re.search(r'[?&]dn=([^&]+)', url)
+            if dn_match:
+                from urllib.parse import unquote_plus
+                torrent_name = unquote_plus(dn_match.group(1))[:100]
+
         try:
             info_result = subprocess.run(
                 [aria2_path, "--show-files", torrent_arg],
@@ -944,7 +950,6 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         torrent_name = line.split("Name:")[1].strip()[:100]
         except Exception as e:
             logger.error(f"Failed to get magnet URI: {e}")
-
         # Register torrent in active_torrents
         global active_torrents
         active_torrents[task_id] = {
@@ -1000,7 +1005,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
         except Exception as e:
             logger.error(f"Failed to get torrent size: {e}")
 
-        # Start aria2c in background with .torrent file (not magnet - magnet needs DHT for metadata)
+        # Start aria2c in background (for .torrent file or magnet URI directly)
         process = subprocess.Popen(
             [aria2_path, "-d", download_dir, "--bt-stop-timeout=300", torrent_arg],
             stdout=subprocess.PIPE,

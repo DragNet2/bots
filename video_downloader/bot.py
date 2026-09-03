@@ -369,6 +369,14 @@ async def get_video_info_from_url(url: str):
     if re.search(vk_pattern, url_lower):
         return await vk.get_video_info(url)
 
+    # cdn.pvvstream.pro - direct video file link (VK CDN), no extraction needed
+    if 'pvvstream.pro' in url_lower:
+        title = "Видео pvvstream.pro"
+        id_match = re.search(r'/videos/[^/]+/(\d+)/', url)
+        if id_match:
+            title = f"Видео VK {id_match.group(1)}"
+        return {"url": url, "title": title}
+
     # sex.spreee.name - uses embed-player.space CDN
     if 'sex.spreee.name' in url_lower or 'embed-player.space' in url_lower:
         try:
@@ -1798,6 +1806,7 @@ async def handle_message(message: types.Message):
         "ukdevilz.com", "noodlemagazine.com",
         "sex.spreee.name", "36ebalka.ru",
         "embed-player.space", "pornhub.com",
+        "pvvstream.pro",
         "youtube.com", "youtu.be"
     ])
     if not is_video_url and not is_torrent_url(text):

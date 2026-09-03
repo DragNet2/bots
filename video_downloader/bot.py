@@ -566,6 +566,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         # Check if video needs transcoding (>1.5GB)
         need_transcode = file_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB
         file_to_send = temp_path
+        transcode_reason = f"размер {format_size(file_size)} превышает лимит Telegram 1.5GB"
 
         try:
             if need_transcode:
@@ -574,7 +575,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
 
                 async def transcode_progress(percent, total):
                     bar = progress_bar(percent, 100)
-                    text = f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование...\n{bar}"
+                    text = f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование...\n⚠️ Причина: {transcode_reason}\n\n{bar}"
                     if transcode_progress.last_text == text:
                         return
                     try:
@@ -593,7 +594,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование видео...",
+                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование видео...\n⚠️ Причина: {transcode_reason}",
                     parse_mode="HTML"
                 )
 
@@ -900,6 +901,44 @@ def get_aria2_bin() -> str:
 COOKIES_FILE = os.path.dirname(os.path.abspath(__file__)) + "/rutracker_cookies.txt"
 
 
+def cleanup_torrent_files(task_id: str, download_dir: str | None = None):
+    """Remove download dir and torrent metadata file for a finished task."""
+    import shutil
+    if download_dir:
+        shutil.rmtree(download_dir, ignore_errors=True)
+    for ext in (".torrent", ".magnet"):
+        try:
+            os.remove(f"{TORRENT_DIR}/torrent_{task_id}{ext}")
+        except OSError:
+            pass
+
+
+def cleanup_stale_torrents(max_age_hours: int = 24):
+    """Remove leftover torrent dirs/files older than max_age_hours (bot startup cleanup)."""
+    import shutil
+    import time
+    now = time.time()
+    cutoff = now - max_age_hours * 3600
+    try:
+        entries = os.listdir(TORRENT_DIR)
+    except OSError:
+        return
+    for name in entries:
+        path = os.path.join(TORRENT_DIR, name)
+        try:
+            if os.path.getmtime(path) > cutoff:
+                continue
+        except OSError:
+            continue
+        if name.startswith("downloads_"):
+            shutil.rmtree(path, ignore_errors=True)
+        elif name.startswith("torrent_"):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def is_torrent_url(url: str) -> bool:
     """Check if URL is a torrent/magnet link."""
     url_lower = url.lower()
@@ -1054,6 +1093,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 text="❌ Не удалось извлечь magnet URI из торрента.",
                 parse_mode="HTML"
             )
+            cleanup_torrent_files(task_id, download_dir)
             return
 
         await bot.edit_message_text(
@@ -1135,6 +1175,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 text=f"❌ Ошибка запуска торрента.\n\n{stderr.decode()[:500] if stderr else 'Unknown error'}",
                 parse_mode="HTML"
             )
+            cleanup_torrent_files(task_id, download_dir)
             return
 
         # Track progress
@@ -1254,12 +1295,11 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             if yandex and user_settings["destination"] == DEST_YADISK:
                 prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})"
                 if await upload_to_yadisk(chat_id, message_id, torrent_name, os.path.join(download_dir, final_file), prefix):
-                    # Cleanup download dir
-                    try:
-                        import shutil
-                        shutil.rmtree(download_dir, ignore_errors=True)
-                    except:
-                        pass
+                    # Cleanup download dir and torrent metadata
+                    cleanup_torrent_files(task_id, download_dir)
+                else:
+                    # Upload failed - keep files for manual retry via /torrents
+                    pass
                 return
 
             is_avi = final_file.lower().endswith(".avi")
@@ -1285,6 +1325,13 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             is_mp4 = final_file.lower().endswith(".mp4")
             is_streamable = any(final_file.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".flv"])
             need_transcode = is_avi or is_wmv or final_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB or AVI/WMV
+            transcode_reasons = []
+            if is_avi or is_wmv:
+                unsupported_formats = ", ".join(fmt for fmt, flag in ((".avi", is_avi), (".wmv", is_wmv)) if flag)
+                transcode_reasons.append(f"неподдерживаемый формат {unsupported_formats} (Telegram поддерживает MP4)")
+            if final_size > 1.5 * 1024 * 1024 * 1024:
+                transcode_reasons.append(f"размер {format_size(final_size)} превышает лимит Telegram 1.5GB")
+            transcode_reason = "; ".join(transcode_reasons)
             logger.info(f"Final check: is_avi={is_avi}, is_streamable={is_streamable}, need_transcode={need_transcode}, final_size={final_size}")
 
             try:
@@ -1301,6 +1348,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка в чат завершена!",
                         parse_mode="HTML"
                     )
+                    # Sent to chat - cleanup download dir and torrent metadata
+                    cleanup_torrent_files(task_id, download_dir)
                 elif need_transcode:
                     logger.info("Entering transcoding branch...")
                     # Transcode to smaller size / convert AVI to MP4
@@ -1309,7 +1358,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         await bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=message_id,
-                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n🔄 Перекодирование видео для отправки...",
+                            text=f"📥 <b>{escape(torrent_name)}</b>\n\n🔄 Перекодирование видео для отправки...\n⚠️ Причина: {transcode_reason}",
                             parse_mode="HTML"
                         )
                     except Exception as e:
@@ -1321,7 +1370,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             await bot.edit_message_text(
                                 chat_id=chat_id,
                                 message_id=message_id,
-                                text=f"📥 <b>{escape(torrent_name)}</b>\n\n🔄 Перекодирование...\n{bar}",
+                                text=f"📥 <b>{escape(torrent_name)}</b>\n\n🔄 Перекодирование...\n⚠️ Причина: {transcode_reason}\n{bar}",
                                 parse_mode="HTML"
                             )
                         except:
@@ -1355,6 +1404,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                                 text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка в чат завершена!",
                                 parse_mode="HTML"
                             )
+                            # Sent to chat - cleanup download dir (original + metadata)
+                            cleanup_torrent_files(task_id, download_dir)
                         except Exception as e:
                             logger.error(f"Failed to send transcoded video: {e}")
                             await bot.edit_message_text(
@@ -1374,10 +1425,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         if yandex:
                             prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n⚠️ Перекодирование не удалось — оригинал ({format_size(final_size)}) слишком большой для чата"
                             if await upload_to_yadisk(chat_id, message_id, torrent_name, final_path, prefix):
-                                try:
-                                    shutil.rmtree(download_dir, ignore_errors=True)
-                                except:
-                                    pass
+                                cleanup_torrent_files(task_id, download_dir)
                 else:
                     # Non-video file: send as document only if it fits the 50MB limit
                     if final_size > 50 * 1024 * 1024:
@@ -1403,6 +1451,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n✅ Отправлено!",
                             parse_mode="HTML"
                         )
+                        # Sent to chat - cleanup download dir and torrent metadata
+                        cleanup_torrent_files(task_id, download_dir)
             except Exception as e:
                 logger.error(f"Failed to send file: {e}")
                 try:
@@ -1423,6 +1473,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 )
             except:
                 pass
+            # Download failed - cleanup incomplete data and torrent metadata
+            cleanup_torrent_files(task_id, download_dir)
 
     except Exception as e:
         logger.error(f"Torrent error: {e}")
@@ -1694,6 +1746,10 @@ async def handle_message(message: types.Message):
 
 async def main():
     global queue_task, upload_workers
+
+    # Cleanup leftover torrent files from previous runs (older than 24h)
+    cleanup_stale_torrents(max_age_hours=24)
+
     queue_task = asyncio.create_task(video_queue_worker())
 
     # Start upload workers (2 parallel uploads)

@@ -22,6 +22,8 @@ bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 vk = VKClient()
 yandex = YandexDisk(os.getenv("YANDEX_TOKEN", "")) if os.getenv("YANDEX_TOKEN") else None
 YADISK_FOLDER = os.getenv("YADISK_FOLDER", "/TG_bot - Скачуля")
+# Proxy for yt-dlp (e.g. socks5://127.0.0.1:1080). Empty = direct connection
+YT_PROXY = os.getenv("YT_PROXY", "")
 dp = Dispatcher()
 
 # Video download queue
@@ -262,6 +264,23 @@ async def get_video_info_from_url(url: str):
 
         except Exception as e:
             logger.error(f"Pornhub extraction failed: {e}")
+
+    # YouTube / youtu.be / Shorts - via yt-dlp (original URL is passed to downloader)
+    if 'youtube.com' in url_lower or 'youtu.be' in url_lower:
+        venv_bin = os.path.dirname(os.path.abspath(__file__)) + "/venv/bin"
+        yt_dlp_path = f"{venv_bin}/yt-dlp"
+        cmd = [yt_dlp_path]
+        if YT_PROXY:
+            cmd.extend(["--proxy", YT_PROXY])
+        cmd.extend(["--dump-json", "--no-playlist", url])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and result.stdout.strip():
+                import json
+                data = json.loads(result.stdout.strip().splitlines()[0])
+                return {"url": url, "title": data.get("title", "Без названия")}
+        except Exception as e:
+            logger.error(f"YouTube extraction failed: {e}")
 
     # VK video (various domains with VK video IDs)
     vk_pattern = r'vk\.com|vk\.io|vk\.ru|userapi\.com|mp4upload\.com'

@@ -736,7 +736,8 @@ async def upload_to_yadisk(chat_id: int, message_id: int, title: str, file_path:
             except Exception:
                 pass
 
-        if await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress):
+        success, err = await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress)
+        if success:
             # Publish file and get public URL
             public_url = await yandex.publish_file(disk_path)
             success_text = f"{prefix}\n\n✅ Загружено на Яндекс.Диск!\n📁 {disk_path}"
@@ -756,7 +757,7 @@ async def upload_to_yadisk(chat_id: int, message_id: int, title: str, file_path:
         await bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
-            text=f"{prefix}\n\n❌ Ошибка загрузки на Яндекс.Диск",
+            text=f"{prefix}\n\n❌ Ошибка загрузки на Яндекс.Диск\n{escape(err)}",
             parse_mode="HTML",
             link_preview_options={"is_disabled": True})
     except Exception as e:
@@ -820,7 +821,7 @@ async def upload_worker():
                     pass  # Message may already show this text ("message is not modified")
                 last_message_text[msg_key] = upload_text  # Reset after edit
 
-                success = await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress)
+                success, err = await yandex.upload_file(file_path, disk_path, progress_callback=upload_progress)
 
                 if success:
                     # Publish file and get public URL
@@ -841,7 +842,7 @@ async def upload_worker():
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
-                        text=f"{escape(video_title)}\n\n{video_link}\n\n❌ Ошибка загрузки на Яндекс.Диск",
+                        text=f"{escape(video_title)}\n\n{video_link}\n\n❌ Ошибка загрузки на Яндекс.Диск\n{escape(err)}",
                         parse_mode="HTML",
             link_preview_options={"is_disabled": True})
 

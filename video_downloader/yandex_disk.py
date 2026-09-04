@@ -20,38 +20,38 @@ class YandexDisk:
         file_path: str,
         disk_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> bool:
+    ) -> tuple[bool, str]:
         """Upload file to Yandex Disk with progress tracking.
-        
+
         Args:
             file_path: Local file path
             disk_path: Path on Yandex Disk (e.g., /Downloads/video.mp4)
             progress_callback: Optional callback(loaded_bytes, total_bytes)
-        
+
         Returns:
-            True if successful
+            (True, "") if successful, (False, error_message) otherwise
         """
         file_size = os.path.getsize(file_path)
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 # Get upload URL
                 url = f"{YANDEX_DISK_API}/resources/upload"
                 params = {"path": disk_path, "overwrite": "true"}
-                
+
                 async with session.get(url, headers=self.headers, params=params) as resp:
                     if resp.status != 200:
                         error = await resp.text()
                         logger.error(f"Failed to get upload URL: {error}")
-                        return False
-                    
+                        return False, f"Не удалось получить ссылку загрузки ({resp.status}): {error[:200]}"
+
                     data = await resp.json()
                     upload_url = data.get("href")
-                    
+
                     if not upload_url:
                         logger.error("No upload URL in response")
-                        return False
-                
+                        return False, "Яндекс.Диск не вернул ссылку для загрузки"
+
                 # Stream file in chunks to avoid loading it fully into memory
                 chunk_size = 1024 * 1024  # 1MB chunks
 
@@ -80,15 +80,15 @@ class YandexDisk:
                             result = progress_callback(file_size, file_size)
                             if asyncio.iscoroutine(result):
                                 await result
-                        return True
+                        return True, ""
                     else:
                         error = await resp.text()
                         logger.error(f"Upload failed: {error}")
-                        return False
-                        
+                        return False, f"Ошибка загрузки файла ({resp.status}): {error[:200]}"
+
         except Exception as e:
             logger.error(f"Error uploading to Yandex Disk: {e}")
-            return False
+            return False, f"Ошибка загрузки: {e}"
 
     async def publish_file(self, disk_path: str) -> str | None:
         """Publish a file/folder and return its public URL.

@@ -515,8 +515,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
-                text="⏳ Начинаю скачивание..."
-            )
+                text="⏳ Начинаю скачивание...",
+            link_preview_options={"is_disabled": True})
         except Exception as e:
             logger.error(f"Could not edit message: {e}")
 
@@ -526,8 +526,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
-                text="❌ Не удалось получить информацию о видео. Проверьте ссылку."
-            )
+                text="❌ Не удалось получить информацию о видео. Проверьте ссылку.",
+            link_preview_options={"is_disabled": True})
             return
 
         video_title = video_info.get("title", "Без названия")
@@ -549,8 +549,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     chat_id=chat_id,
                     message_id=message_id,
                     text=text,
-                    parse_mode="HTML"
-                )
+                    parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                 on_progress.last_text = text
             except Exception as e:
                 msg = str(e)
@@ -577,8 +577,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"{escape(video_title)}\n\n{video_link}\n\n❌ Скачивание прервано. Повторите команду с той же ссылкой для докачки.\n\n(Файл сохранён для возобновления)",
-                    parse_mode="HTML"
-                )
+                    parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
             except Exception:
                 pass
             return
@@ -590,8 +590,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text="❌ Файл не был создан."
-                )
+                    text="❌ Файл не был создан.",
+            link_preview_options={"is_disabled": True})
             except Exception:
                 pass
             return
@@ -603,8 +603,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 chat_id=chat_id,
                 message_id=message_id,
                 text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n⏫ Загружаю в чат...",
-                parse_mode="HTML"
-            )
+                parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
         except Exception:
             pass
 
@@ -636,8 +636,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Готово!\n\n☁️ Загружаю на Яндекс.Диск...",
-                    parse_mode="HTML"
-                )
+                    parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
 
                 # Queue upload for background processing (file will be cleaned up by upload worker)
                 await upload_queue.put((chat_id, message_id, video_title, video_link, file_to_send, send_file_name))
@@ -652,8 +652,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 chat_id=chat_id,
                 message_id=message_id,
                 text=f"{escape(video_title)}\n\n{video_link}\n\n⏫ Загружаю в чат...",
-                parse_mode="HTML"
-            )
+                parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
             try:
                 with open(file_to_send, "rb") as video_file:
                     await bot.send_video(
@@ -673,8 +673,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 chat_id=chat_id,
                 message_id=message_id,
                 text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Загрузка в чат завершена!",
-                parse_mode="HTML"
-            )
+                parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
 
         except Exception as e:
             logger.error(f"Error sending video: {e}")
@@ -682,8 +682,8 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text=f"❌ Ошибка: {e}"
-                )
+                    text=f"❌ Ошибка: {e}",
+            link_preview_options={"is_disabled": True})
             except Exception:
                 pass
 
@@ -720,8 +720,8 @@ async def upload_to_yadisk(chat_id: int, message_id: int, title: str, file_path:
             chat_id=chat_id,
             message_id=message_id,
             text=f"{prefix}\n\n☁️ Загружаю на Яндекс.Диск...",
-            parse_mode="HTML"
-        )
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
 
         async def upload_progress(loaded, total):
             percent = min(100, (loaded / total) * 100) if total > 0 else 0
@@ -731,8 +731,8 @@ async def upload_to_yadisk(chat_id: int, message_id: int, title: str, file_path:
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"{prefix}\n\n☁️ Загружаю на Яндекс.Диск...\n{bar}",
-                    parse_mode="HTML"
-                )
+                    parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
             except Exception:
                 pass
 
@@ -749,7 +749,7 @@ async def upload_to_yadisk(chat_id: int, message_id: int, title: str, file_path:
                 message_id=message_id,
                 text=success_text,
                 parse_mode="HTML",
-                disable_web_page_preview=True
+                link_preview_options={"is_disabled": True}
             )
             return disk_path
 
@@ -757,16 +757,16 @@ async def upload_to_yadisk(chat_id: int, message_id: int, title: str, file_path:
             chat_id=chat_id,
             message_id=message_id,
             text=f"{prefix}\n\n❌ Ошибка загрузки на Яндекс.Диск",
-            parse_mode="HTML"
-        )
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
     except Exception as e:
         logger.error(f"Yadisk upload error: {e}")
         try:
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
-                text=f"{prefix}\n\n❌ Ошибка: {e}"
-            )
+                text=f"{prefix}\n\n❌ Ошибка: {e}",
+            link_preview_options={"is_disabled": True})
         except Exception:
             pass
     return None
@@ -802,8 +802,8 @@ async def upload_worker():
                                 chat_id=chat_id,
                                 message_id=message_id,
                                 text=msg_text,
-                                parse_mode="HTML"
-                            )
+                                parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                             last_message_text[msg_key] = msg_text
                         except Exception:
                             pass
@@ -814,8 +814,8 @@ async def upload_worker():
                         chat_id=chat_id,
                         message_id=message_id,
                         text=upload_text,
-                        parse_mode="HTML"
-                    )
+                        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                 except Exception:
                     pass  # Message may already show this text ("message is not modified")
                 last_message_text[msg_key] = upload_text  # Reset after edit
@@ -835,15 +835,15 @@ async def upload_worker():
                         message_id=message_id,
                         text=success_text,
                         parse_mode="HTML",
-                        disable_web_page_preview=True
+                        link_preview_options={"is_disabled": True}
                     )
                 else:
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
                         text=f"{escape(video_title)}\n\n{video_link}\n\n❌ Ошибка загрузки на Яндекс.Диск",
-                        parse_mode="HTML"
-                    )
+                        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
 
                 # Cleanup local file
                 try:
@@ -858,8 +858,8 @@ async def upload_worker():
                         chat_id=chat_id,
                         message_id=message_id,
                         text=f"❌ Ошибка: {e}",
-                        parse_mode="HTML"
-                    )
+                        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                 except:
                     pass
             finally:
@@ -1001,8 +1001,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text="❌ Не удалось извлечь ID торрента из ссылки."
-                )
+                    text="❌ Не удалось извлечь ID торрента из ссылки.",
+            link_preview_options={"is_disabled": True})
                 return
 
             # Build the download URL
@@ -1029,15 +1029,15 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                              "1. Экспортируйте cookies из браузера в файл `rutracker_cookies.txt` (формат Netscape)\n"
                              "2. Положите файл в папку бота: `/home/bots/video_downloader/rutracker_cookies.txt`\n\n"
                              "Или укажите логин/пароль от rutracker в .env",
-                        parse_mode="HTML"
-                    )
+                        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                 else:
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
                         text=f"❌ Не удалось скачать .torrent файл.\n\n{result.stderr[:300] if result.stderr else 'Unknown error'}",
-                        parse_mode="HTML"
-                    )
+                        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                 return
 
             torrent_arg = torrent_path
@@ -1048,8 +1048,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text="❌ Не удалось извлечь ID торрента из ссылки rutor."
-                )
+                    text="❌ Не удалось извлечь ID торрента из ссылки rutor.",
+            link_preview_options={"is_disabled": True})
                 return
 
             # Normalize to the download endpoint (works for d.rutor.info/t/rutor.info links too)
@@ -1068,8 +1068,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"❌ Не удалось скачать .torrent файл с rutor.\n\n{result.stderr[:300] if result.stderr else 'Unknown error'}",
-                    parse_mode="HTML"
-                )
+                    parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                 return
 
             torrent_arg = torrent_path
@@ -1090,8 +1090,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"❌ Не удалось скачать .torrent файл.\n\n{result.stderr[:500] if result.stderr else 'Unknown error'}",
-                    parse_mode="HTML"
-                )
+                    parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                 return
 
             torrent_arg = torrent_path
@@ -1142,8 +1142,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 chat_id=chat_id,
                 message_id=message_id,
                 text="❌ Не удалось извлечь magnet URI из торрента.",
-                parse_mode="HTML"
-            )
+                parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
             cleanup_torrent_files(task_id, download_dir)
             return
 
@@ -1151,8 +1151,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             chat_id=chat_id,
             message_id=message_id,
             text=f"📥 <b>{escape(torrent_name)}</b>\n\n⏬ Запускаю загрузку через aria2...",
-            parse_mode="HTML"
-        )
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
 
         # Get total size from torrent info
         try:
@@ -1224,8 +1224,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 chat_id=chat_id,
                 message_id=message_id,
                 text=f"❌ Ошибка запуска торрента.\n\n{stderr.decode()[:500] if stderr else 'Unknown error'}",
-                parse_mode="HTML"
-            )
+                parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
             cleanup_torrent_files(task_id, download_dir)
             return
 
@@ -1315,8 +1315,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         chat_id=chat_id,
                         message_id=message_id,
                         text=f"📥 <b>{escape(torrent_name)}</b>\n\n⏬ Загрузка через aria2...\n{bar}{size_str}",
-                        parse_mode="HTML"
-                    )
+                        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                 except Exception as e:
                     logger.error(f"Failed to edit message: {e}")
                 last_update = asyncio.get_event_loop().time()
@@ -1364,8 +1364,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n⏫ Загружаю в чат...",
-                    parse_mode="HTML"
-                )
+                    parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
             except:
                 pass
 
@@ -1413,8 +1413,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                         chat_id=chat_id,
                         message_id=message_id,
                         text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка в чат завершена!",
-                        parse_mode="HTML"
-                    )
+                        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                     # Sent to chat - cleanup download dir and torrent metadata
                     cleanup_torrent_files(task_id, download_dir)
                 else:
@@ -1429,8 +1429,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                                 chat_id=chat_id,
                                 message_id=message_id,
                                 text=f"⚠️ Файл не видео ({escape(final_file)}, {format_size(final_size)}) и превышает лимит Telegram 50MB для документов.\n\n💡 Настройте YANDEX_TOKEN для автозагрузки на Яндекс.Диск.",
-                                parse_mode="HTML"
-                            )
+                                parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                     else:
                         await bot.send_document(
                             chat_id=chat_id,
@@ -1440,8 +1440,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             chat_id=chat_id,
                             message_id=message_id,
                             text=f"📥 <b>{escape(torrent_name)}</b>\n\n✅ Загрузка завершена ({format_size(final_size)})\n\n✅ Отправлено!",
-                            parse_mode="HTML"
-                        )
+                            parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
                         # Sent to chat - cleanup download dir and torrent metadata
                         cleanup_torrent_files(task_id, download_dir)
             except Exception as e:
@@ -1450,8 +1450,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
-                        text=f"❌ Ошибка отправки файла: {e}"
-                    )
+                        text=f"❌ Ошибка отправки файла: {e}",
+            link_preview_options={"is_disabled": True})
                 except:
                     pass
         else:
@@ -1460,8 +1460,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"❌ Загрузка не удалась.\n\n{stderr.decode()[:300] if stderr else ''}",
-                    parse_mode="HTML"
-                )
+                    parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
             except:
                 pass
             # Download failed - cleanup incomplete data and torrent metadata
@@ -1473,8 +1473,8 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
-                text=f"❌ Ошибка: {e}"
-            )
+                text=f"❌ Ошибка: {e}",
+            link_preview_options={"is_disabled": True})
         except:
             pass
     finally:
@@ -1504,9 +1504,11 @@ def settings_keyboard() -> InlineKeyboardMarkup:
 async def cmd_settings(message: types.Message):
     """Show bot settings."""
     if user_settings["destination"] == DEST_YADISK and not yandex:
-        await message.answer("❌ Яндекс.Диск не настроен (YANDEX_TOKEN). Загрузка в чат.")
+        await message.answer("❌ Яндекс.Диск не настроен (YANDEX_TOKEN). Загрузка в чат.",
+            link_preview_options={"is_disabled": True})
         return
-    await message.answer("⚙️ <b>Настройки бота</b>", parse_mode="HTML", reply_markup=settings_keyboard())
+    await message.answer("⚙️ <b>Настройки бота</b>", parse_mode="HTML", reply_markup=settings_keyboard(),
+            link_preview_options={"is_disabled": True})
 
 
 @dp.callback_query(F.data == "set_dest")
@@ -1539,12 +1541,14 @@ async def cmd_yadisk(message: types.Message):
     global yandex
 
     if not yandex:
-        await message.answer("❌ Яндекс.Диск не настроен.")
+        await message.answer("❌ Яндекс.Диск не настроен.",
+            link_preview_options={"is_disabled": True})
         return
 
     disk_info = await yandex.get_info()
     if not disk_info:
-        await message.answer("❌ Не удалось подключиться к Яндекс.Диску.")
+        await message.answer("❌ Не удалось подключиться к Яндекс.Диску.",
+            link_preview_options={"is_disabled": True})
         return
 
     total = int(disk_info.get("total_space", 0))
@@ -1568,8 +1572,8 @@ async def cmd_yadisk(message: types.Message):
         f"💾 Занято: <code>{format_size(used)}</code>\n"
         f"💿 Свободно: <code>{format_size(free)}</code>\n"
         f"📦 Всего: <code>{format_size(total)}</code>",
-        parse_mode="HTML"
-    )
+        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
 
 
 @dp.message(Command("start"))
@@ -1584,8 +1588,8 @@ async def cmd_start(message: types.Message):
         "• noodlemagazine.com\n"
         "• Торренты (Rutracker, magnet)\n\n"
         "Команда /settings — куда загружать и макс. разрешение.\n"
-        "Можно отправлять несколько ссылок — они будут обработаны по очереди."
-    )
+        "Можно отправлять несколько ссылок — они будут обработаны по очереди.",
+            link_preview_options={"is_disabled": True})
 
 
 @dp.message(Command("help"))
@@ -1597,8 +1601,8 @@ async def cmd_help(message: types.Message):
         "/settings — куда загружать и макс. разрешение\n"
         "/queue — статус очереди\n"
         "/torrents — активные загрузки",
-        parse_mode="HTML"
-    )
+        parse_mode="HTML",
+            link_preview_options={"is_disabled": True})
 
 
 @dp.message(Command("queue"))
@@ -1606,12 +1610,15 @@ async def cmd_queue(message: types.Message):
     """Check current video queue status."""
     if video_queue.empty():
         if is_downloading:
-            await message.answer("🎬 Сейчас скачивается видео. Очередь пуста.")
+            await message.answer("🎬 Сейчас скачивается видео. Очередь пуста.",
+            link_preview_options={"is_disabled": True})
         else:
-            await message.answer("✅ Очередь пуста, бот в режиме ожидания.")
+            await message.answer("✅ Очередь пуста, бот в режиме ожидания.",
+            link_preview_options={"is_disabled": True})
     else:
         count = video_queue.qsize()
-        await message.answer(f"📋 В очереди видео: {count}")
+        await message.answer(f"📋 В очереди видео: {count}",
+            link_preview_options={"is_disabled": True})
 
 
 @dp.message(Command("torrents"))
@@ -1620,7 +1627,8 @@ async def cmd_torrents(message: types.Message):
     global active_torrents
 
     if not active_torrents:
-        await message.answer("✅ Нет активных загрузок.")
+        await message.answer("✅ Нет активных загрузок.",
+            link_preview_options={"is_disabled": True})
         return
 
     # Build list of torrents
@@ -1650,7 +1658,8 @@ async def cmd_torrents(message: types.Message):
     # Create inline keyboard
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-    await message.answer(text, parse_mode="HTML", reply_markup=markup)
+    await message.answer(text, parse_mode="HTML", reply_markup=markup,
+            link_preview_options={"is_disabled": True})
 
 
 @dp.callback_query()
@@ -1702,7 +1711,8 @@ async def handle_message(message: types.Message):
     # Check if it's a torrent link
     if is_torrent_url(text):
         # Handle torrent download
-        status_msg = await message.answer("📥 Получена ссылка на торрент...")
+        status_msg = await message.answer("📥 Получена ссылка на торрент...",
+            link_preview_options={"is_disabled": True})
         asyncio.create_task(download_torrent(message.chat.id, status_msg.message_id, text))
         return
 
@@ -1717,7 +1727,8 @@ async def handle_message(message: types.Message):
         "youtube.com", "youtu.be"
     ])
     if not is_video_url and not is_torrent_url(text):
-        await message.answer("Отправьте ссылку на видео из ВКонтакте или торрент.")
+        await message.answer("Отправьте ссылку на видео из ВКонтакте или торрент.",
+            link_preview_options={"is_disabled": True})
         return
 
     # Start queue worker if not running
@@ -1725,7 +1736,8 @@ async def handle_message(message: types.Message):
         queue_task = asyncio.create_task(video_queue_worker())
 
     # Send initial message and get its ID
-    status_msg = await message.answer("⏳ Видео в очереди на скачивание...")
+    status_msg = await message.answer("⏳ Видео в очереди на скачивание...",
+            link_preview_options={"is_disabled": True})
 
     # Add to queue: (chat_id, message_id, url)
     await video_queue.put((message.chat.id, status_msg.message_id, text))

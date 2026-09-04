@@ -608,53 +608,16 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         except Exception:
             pass
 
-        # Check if video needs transcoding (>50MB - Telegram Bot API upload limit)
+        # Check if video exceeds Telegram Bot API upload limit (50MB)
         TELEGRAM_VIDEO_LIMIT = 50 * 1024 * 1024  # 50MB
-        need_transcode = file_size > TELEGRAM_VIDEO_LIMIT
         file_to_send = temp_path
-        transcode_reason = f"размер {format_size(file_size)} превышает лимит Telegram для ботов 50MB"
 
         try:
-            if need_transcode or file_size > TELEGRAM_VIDEO_LIMIT:
-                # Transcode to smaller size
-                transcoded_path = temp_path + ".transcoded.mp4"
-
-                async def transcode_progress(percent, total):
-                    bar = progress_bar(percent, 100)
-                    text = f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование...\n⚠️ Причина: {transcode_reason}\n\n{bar}"
-                    if transcode_progress.last_text == text:
-                        return
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text=text,
-                            parse_mode="HTML"
-                        )
-                        transcode_progress.last_text = text
-                    except Exception:
-                        pass
-
-                transcode_progress.last_text = None
-
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=f"{escape(video_title)}\n\n{video_link}\n\n✅ Скачивание завершено ({format_size(file_size)})\n\n🔄 Перекодирование видео...\n⚠️ Причина: {transcode_reason}",
-                    parse_mode="HTML"
-                )
-
-                success = await transcode_video(temp_path, transcoded_path, max_size_mb=48, progress_callback=transcode_progress)
-
-                if success and os.path.exists(transcoded_path):
-                    file_to_send = transcoded_path
-                else:
-                    # Transcode failed - fallback: upload original to Yandex Disk if too big for chat
-                    if yandex and file_size > TELEGRAM_VIDEO_LIMIT:
-                        prefix = f"{escape(video_title)}\n\n{video_link}\n\n⚠️ Перекодирование не удалось — файл ({format_size(file_size)}) слишком большой для чата"
-                        await upload_to_yadisk(chat_id, message_id, video_title, temp_path, prefix)
-                        return
-                    raise Exception("Transcoding failed")
+            # Files larger than 50MB can't be sent to chat - upload to Yandex Disk by default
+            if file_size > TELEGRAM_VIDEO_LIMIT and yandex:
+                prefix = f"{escape(video_title)}\n\n{video_link}\n\n⚠️ Файл ({format_size(file_size)}) слишком большой для отправки в чат (лимит Telegram для ботов 50MB)\n\n☁️ Загружаю на Яндекс.Диск..."
+                await upload_to_yadisk(chat_id, message_id, video_title, temp_path, prefix)
+                return
 
             # Upload to Yandex Disk (non-blocking - queue for background)
             if yandex and user_settings["destination"] == DEST_YADISK:
@@ -723,13 +686,6 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 )
             except Exception:
                 pass
-        finally:
-            # Cleanup transcoded file
-            if need_transcode and 'transcoded_path' in locals() and os.path.exists(transcoded_path):
-                try:
-                    os.remove(transcoded_path)
-                except:
-                    pass
 
     except Exception as e:
         logger.error(f"Error processing video: {e}")
@@ -1420,17 +1376,24 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             is_mp4 = final_file.lower().endswith(".mp4")
             is_streamable = any(final_file.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".flv"])
             TELEGRAM_VIDEO_LIMIT = 50 * 1024 * 1024  # 50MB - Telegram Bot API upload limit
-            need_transcode = is_avi or is_wmv or final_size > TELEGRAM_VIDEO_LIMIT  # > 50MB or AVI/WMV
+            # AVI/WMV need transcoding (unsupported format); oversized files go to Yandex Disk
+            need_transcode = is_avi or is_wmv
             transcode_reasons = []
             if is_avi or is_wmv:
                 unsupported_formats = ", ".join(fmt for fmt, flag in ((".avi", is_avi), (".wmv", is_wmv)) if flag)
                 transcode_reasons.append(f"неподдерживаемый формат {unsupported_formats} (Telegram поддерживает MP4)")
-            if final_size > TELEGRAM_VIDEO_LIMIT:
-                transcode_reasons.append(f"размер {format_size(final_size)} превышает лимит Telegram для ботов 50MB")
             transcode_reason = "; ".join(transcode_reasons)
             logger.info(f"Final check: is_avi={is_avi}, is_streamable={is_streamable}, need_transcode={need_transcode}, final_size={final_size}")
 
             try:
+                # Files larger than 50MB can't be sent to chat - upload to Yandex Disk by default
+                if final_size > TELEGRAM_VIDEO_LIMIT and yandex:
+                    logger.warning(f"Torrent file too large for Telegram ({format_size(final_size)}), uploading to Yandex Disk")
+                    prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n⚠️ Файл ({format_size(final_size)}) слишком большой для отправки в чат (лимит Telegram для ботов 50MB)\n\n☁️ Загружаю на Яндекс.Диск..."
+                    if await upload_to_yadisk(chat_id, message_id, torrent_name, final_path, prefix):
+                        cleanup_torrent_files(task_id, download_dir)
+                    return
+
                 if is_streamable and not need_transcode:
                     # Send as video - use file path for streaming
                     logger.info("Sending as MP4 video...")

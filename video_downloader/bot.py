@@ -115,7 +115,7 @@ def format_size(size_bytes: float) -> str:
         return f"{size_bytes/1024/1024/1024:.2f}GB"
 
 
-async def transcode_video(input_path: str, output_path: str, max_size_mb: int = 1900, progress_callback=None):
+async def transcode_video(input_path: str, output_path: str, max_size_mb: int = 48, progress_callback=None):
     """Transcode video to fit within max_size_mb using FFmpeg."""
     import re
 
@@ -608,13 +608,11 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         except Exception:
             pass
 
-        # Check if video needs transcoding (>1.5GB)
-        need_transcode = file_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB
+        # Check if video needs transcoding (>50MB - Telegram Bot API upload limit)
+        TELEGRAM_VIDEO_LIMIT = 50 * 1024 * 1024  # 50MB
+        need_transcode = file_size > TELEGRAM_VIDEO_LIMIT
         file_to_send = temp_path
-        transcode_reason = f"размер {format_size(file_size)} превышает лимит Telegram 1.5GB"
-
-        # Bot API limit: bots can only upload videos up to 2GB via sendVideo
-        TELEGRAM_VIDEO_LIMIT = 2 * 1024 * 1024 * 1024
+        transcode_reason = f"размер {format_size(file_size)} превышает лимит Telegram для ботов 50MB"
 
         try:
             if need_transcode or file_size > TELEGRAM_VIDEO_LIMIT:
@@ -646,13 +644,13 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                     parse_mode="HTML"
                 )
 
-                success = await transcode_video(temp_path, transcoded_path, max_size_mb=1800, progress_callback=transcode_progress)
+                success = await transcode_video(temp_path, transcoded_path, max_size_mb=48, progress_callback=transcode_progress)
 
                 if success and os.path.exists(transcoded_path):
                     file_to_send = transcoded_path
                 else:
                     # Transcode failed - fallback: upload original to Yandex Disk if too big for chat
-                    if yandex and file_size > 1.9 * 1024 * 1024 * 1024:
+                    if yandex and file_size > TELEGRAM_VIDEO_LIMIT:
                         prefix = f"{escape(video_title)}\n\n{video_link}\n\n⚠️ Перекодирование не удалось — файл ({format_size(file_size)}) слишком большой для чата"
                         await upload_to_yadisk(chat_id, message_id, video_title, temp_path, prefix)
                         return
@@ -700,7 +698,7 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                         video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
                     )
             except Exception as send_e:
-                # Telegram limits: videos up to 2GB for bots (Request Entity Too Large otherwise)
+                # Telegram Bot API upload limit: 50MB (Request Entity Too Large otherwise)
                 send_too_large = "Request Entity Too Large" in str(send_e) or "entity too large" in str(send_e).lower()
                 if send_too_large and yandex:
                     logger.warning(f"Video too large for Telegram ({format_size(os.path.getsize(file_to_send))}), uploading to Yandex Disk")
@@ -1421,13 +1419,14 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
             is_wmv = final_file.lower().endswith(".wmv")
             is_mp4 = final_file.lower().endswith(".mp4")
             is_streamable = any(final_file.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".flv"])
-            need_transcode = is_avi or is_wmv or final_size > 1.5 * 1024 * 1024 * 1024  # > 1.5GB or AVI/WMV
+            TELEGRAM_VIDEO_LIMIT = 50 * 1024 * 1024  # 50MB - Telegram Bot API upload limit
+            need_transcode = is_avi or is_wmv or final_size > TELEGRAM_VIDEO_LIMIT  # > 50MB or AVI/WMV
             transcode_reasons = []
             if is_avi or is_wmv:
                 unsupported_formats = ", ".join(fmt for fmt, flag in ((".avi", is_avi), (".wmv", is_wmv)) if flag)
                 transcode_reasons.append(f"неподдерживаемый формат {unsupported_formats} (Telegram поддерживает MP4)")
-            if final_size > 1.5 * 1024 * 1024 * 1024:
-                transcode_reasons.append(f"размер {format_size(final_size)} превышает лимит Telegram 1.5GB")
+            if final_size > TELEGRAM_VIDEO_LIMIT:
+                transcode_reasons.append(f"размер {format_size(final_size)} превышает лимит Telegram для ботов 50MB")
             transcode_reason = "; ".join(transcode_reasons)
             logger.info(f"Final check: is_avi={is_avi}, is_streamable={is_streamable}, need_transcode={need_transcode}, final_size={final_size}")
 
@@ -1485,7 +1484,7 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
 
                     logger.info(f"Starting transcode: {final_path} -> {transcoded_path}")
                     try:
-                        success = await transcode_video(final_path, transcoded_path, max_size_mb=1800, progress_callback=transcode_progress)
+                        success = await transcode_video(final_path, transcoded_path, max_size_mb=48, progress_callback=transcode_progress)
                         logger.info(f"Transcode result: success={success}, exists={os.path.exists(transcoded_path)}")
                     except Exception as e:
                         logger.error(f"Transcode failed with exception: {e}")

@@ -7,6 +7,7 @@ on:
       - '.github/workflows/deploy.yml'
       - 'server_report/**'
       - 'openrouter_bot/**'
+      - 'ollama_bot/**'
       - 'tasktracker_bot/**'
       - 'vpn_switch_bot/**'
       - 'ym_downloader/**'
@@ -20,6 +21,7 @@ on:
         options:
           - server_report
           - openrouter_bot
+          - ollama_bot
           - tasktracker_bot
           - vpn_switch_bot
           - ym_downloader
@@ -42,7 +44,7 @@ jobs:
           set +e
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ "${{ inputs.bot }}" = "all" ]; then
-              echo "bots=server_report openrouter_bot tasktracker_bot vpn_switch_bot ym_downloader video_downloader" >> $GITHUB_OUTPUT
+              echo "bots=server_report openrouter_bot ollama_bot tasktracker_bot vpn_switch_bot ym_downloader video_downloader" >> $GITHUB_OUTPUT
             else
               echo "bots=${{ inputs.bot }}" >> $GITHUB_OUTPUT
             fi

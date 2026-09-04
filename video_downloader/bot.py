@@ -613,8 +613,11 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
         file_to_send = temp_path
         transcode_reason = f"размер {format_size(file_size)} превышает лимит Telegram 1.5GB"
 
+        # Bot API limit: bots can only upload videos up to 2GB via sendVideo
+        TELEGRAM_VIDEO_LIMIT = 2 * 1024 * 1024 * 1024
+
         try:
-            if need_transcode:
+            if need_transcode or file_size > TELEGRAM_VIDEO_LIMIT:
                 # Transcode to smaller size
                 transcoded_path = temp_path + ".transcoded.mp4"
 
@@ -690,11 +693,21 @@ async def process_video_download(chat_id: int, message_id: int, url: str):
                 text=f"{escape(video_title)}\n\n{video_link}\n\n⏫ Загружаю в чат...",
                 parse_mode="HTML"
             )
-            with open(file_to_send, "rb") as video_file:
-                await bot.send_video(
-                    chat_id=chat_id,
-                    video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
-                )
+            try:
+                with open(file_to_send, "rb") as video_file:
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=types.BufferedInputFile(video_file.read(), filename="video.mp4")
+                    )
+            except Exception as send_e:
+                # Telegram limits: videos up to 2GB for bots (Request Entity Too Large otherwise)
+                send_too_large = "Request Entity Too Large" in str(send_e) or "entity too large" in str(send_e).lower()
+                if send_too_large and yandex:
+                    logger.warning(f"Video too large for Telegram ({format_size(os.path.getsize(file_to_send))}), uploading to Yandex Disk")
+                    prefix = f"{escape(video_title)}\n\n{video_link}\n\n⚠️ Файл ({format_size(os.path.getsize(file_to_send))}) слишком большой для отправки в чат (лимит Telegram)"
+                    if await upload_to_yadisk(chat_id, message_id, video_title, file_to_send, prefix):
+                        return
+                raise
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
@@ -1422,10 +1435,20 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                 if is_streamable and not need_transcode:
                     # Send as video - use file path for streaming
                     logger.info("Sending as MP4 video...")
-                    await bot.send_video(
-                        chat_id=chat_id,
-                        video=types.FSInputFile(final_path)
-                    )
+                    try:
+                        await bot.send_video(
+                            chat_id=chat_id,
+                            video=types.FSInputFile(final_path)
+                        )
+                    except Exception as send_e:
+                        send_too_large = "Request Entity Too Large" in str(send_e) or "entity too large" in str(send_e).lower()
+                        if send_too_large and yandex:
+                            logger.warning(f"Torrent file too large for Telegram ({format_size(final_size)}), uploading to Yandex Disk")
+                            prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n⚠️ Файл ({format_size(final_size)}) слишком большой для отправки в чат (лимит Telegram)"
+                            if await upload_to_yadisk(chat_id, message_id, torrent_name, final_path, prefix):
+                                cleanup_torrent_files(task_id, download_dir)
+                            return
+                        raise
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=message_id,
@@ -1492,12 +1515,19 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             cleanup_torrent_files(task_id, download_dir)
                         except Exception as e:
                             logger.error(f"Failed to send transcoded video: {e}")
-                            await bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=message_id,
-                                text=f"❌ Ошибка отправки: {e}",
-                                parse_mode="HTML"
-                            )
+                            err_text = str(e)
+                            if ("Request Entity Too Large" in err_text or "entity too large" in err_text.lower()) and yandex:
+                                # Transcoded file still too large - upload original to Yandex Disk
+                                prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n⚠️ Файл ({format_size(final_size)}) слишком большой для чата даже после перекодирования"
+                                if await upload_to_yadisk(chat_id, message_id, torrent_name, final_path, prefix):
+                                    cleanup_torrent_files(task_id, download_dir)
+                            else:
+                                await bot.edit_message_text(
+                                    chat_id=chat_id,
+                                    message_id=message_id,
+                                    text=f"❌ Ошибка отправки: {e}",
+                                    parse_mode="HTML"
+                                )
                     else:
                         await bot.edit_message_text(
                             chat_id=chat_id,
@@ -1510,6 +1540,16 @@ async def download_torrent(chat_id: int, message_id: int, url: str):
                             prefix = f"📥 <b>{escape(torrent_name)}</b>\n\n⚠️ Перекодирование не удалось — оригинал ({format_size(final_size)}) слишком большой для чата"
                             if await upload_to_yadisk(chat_id, message_id, torrent_name, final_path, prefix):
                                 cleanup_torrent_files(task_id, download_dir)
+                            else:
+                                # Yadisk upload failed too - keep original files for manual retry
+                                pass
+                        else:
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                text=f"❌ Ошибка перекодирования. 💡 Настройте YANDEX_TOKEN для автозагрузки на Яндекс.Диск.",
+                                parse_mode="HTML"
+                            )
                 else:
                     # Non-video file: send as document only if it fits the 50MB limit
                     if final_size > 50 * 1024 * 1024:

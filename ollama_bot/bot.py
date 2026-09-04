@@ -3,8 +3,8 @@
 ollama_bot — Telegram-бот мониторинга баланса и расходов Ollama Cloud.
 
 Возможности:
-- 💰 текущий баланс (GET /api/me на https://ollama.com — план, включённый
-  месячный пул, остаток по extra usage)
+- 💰 текущий баланс и расход за месяц (план, «$X из $Y used»,
+  число запросов, модели — как на https://ollama.com/settings)
 - 📅 расход за сегодня и 🗓 за месяц (дельта баланса, время московское)
 - 🤖 список доступных cloud-моделей (GET /api/tags, фильтр :cloud)
 - ⚠️ уведомления при остатке ниже $5 / $2 / $1
@@ -156,12 +156,60 @@ def fetch_account() -> dict:
     return r.json()
 
 
+def _walk(obj, path=()):
+    """Рекурсивный обход вложенной структуры: yield (путь-кортеж, скаляр)."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from _walk(v, path + (str(k),))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            yield from _walk(v, path + (str(i),))
+    else:
+        yield path, obj
+
+
+def _norm(s: str) -> str:
+    return s.lower().replace("_", "").replace("-", "").replace(" ", "")
+
+
+def _find_number(raw, *names, exclude=()):
+    """Число по имени последнего ключа пути (регистр/разделители не важны)."""
+    for path, v in _walk(raw):
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            continue
+        seg = _norm(path[-1])
+        if seg in names and not any(x in seg for x in exclude):
+            return float(v)
+    return None
+
+
+def _find_string(raw, *names):
+    for path, v in _walk(raw):
+        if isinstance(v, str) and _norm(path[-1]) in names:
+            return v
+    return None
+
+
+def _find_models_usage(raw) -> dict:
+    """Расход по моделям: {"model": N} из секции ...Models.* ответа."""
+    out = {}
+    for path, v in _walk(raw):
+        if len(path) < 2 or _norm(path[-2]) != "models":
+            continue
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[str(path[-1])] = int(v)
+    return out
+
+
 def normalize_account(data: dict) -> dict:
     """Приводит ответ /api/me к стабильной внутренней структуре.
 
     Реальный ответ сейчас содержит: ID, Email, Name, Plan, Bio, AvatarURL,
-    FirstName, LastName, Links, CreatedAt. Платные планы (Pro/Max/Team) могут
-    отдавать дополнительные поля — нормализатор понимает обе формы.
+    FirstName, LastName, Links, CreatedAt. Платные планы (Pro/Max/Team)
+    дополнительно отдают данные monthly usage (как на
+    https://ollama.com/settings: «$2.01 of $60 used», «690 requests»,
+    «Models used this month») — точные имена полей не документированы,
+    поэтому поиск полей рекурсивный, по смыслу ключа.
 
     Возвращает dict с полями:
       - balance: float — доступный остаток (0.0, если API не отдаёт)
@@ -171,7 +219,9 @@ def normalize_account(data: dict) -> dict:
       - included: float | None — размер включённого месячного пула ($)
       - extra: float | None — размер extra usage баланса ($)
       - used: float | None — использовано в текущем месяце ($)
-      - renews_at: str | None
+      - requests: int | None — запросов за текущий месяц
+      - models_used: dict — {модель: запросов} за месяц
+      - renews_at: str | None — дата/текст следующего обновления пула
       - raw: dict — полный ответ API
     """
     raw = data if isinstance(data, dict) else {}
@@ -185,45 +235,65 @@ def normalize_account(data: dict) -> dict:
         or "?"
     )
 
-    def _money(*keys, default=None):
-        for k in keys:
-            if k in raw and raw[k] is not None:
-                try:
-                    return float(raw[k])
-                except (TypeError, ValueError):
-                    continue
-        return default
-
-    included = _money(
-        "included_credits",
-        "monthly_credits",
-        "plan_credits",
+    included = _find_number(
+        raw,
+        "includedcredits",
+        "monthlycredits",
+        "plancredits",
         "included",
-        "IncludedCredits",
-        default=None,
+        "monthlyusage",
+        "includedusage",
     )
-    extra = _money(
-        "extra_credits",
-        "extra_balance",
-        "add_on_balance",
+    extra = _find_number(
+        raw,
+        "extracredits",
+        "extrabalance",
+        "addonbalance",
         "extra",
-        "ExtraCredits",
-        default=None,
+        "extrausagecredits",
     )
-    used = _money("used", "usage", "total_usage", "Used", default=None)
+    used = _find_number(
+        raw,
+        "used",
+        "usage",
+        "totalusage",
+        "usedcredits",
+        "usedusage",
+        "monthlyused",
+        exclude=("models",),
+    )
+    # Если used >= included — вероятно, перепутаны местами; но это редкий
+    # случай, оставляем как есть (проверка чисто информационная).
+    if (
+        included is not None
+        and used is not None
+        and included > 0
+        and used > included * 100
+    ):
+        included, used = used, included
+
+    requests_count = _find_number(
+        raw, "requests", "requestcount", "totalrequests", exclude=("monthly",)
+    )
+    if requests_count is not None:
+        requests_count = int(requests_count)
+    models_used = _find_models_usage(raw)
 
     parts = [v for v in (included, extra) if v is not None]
     if parts:
         available = sum(parts) - (used or 0.0)
     else:
-        available = _money(
-            "balance",
-            "available",
-            "remaining",
-            "credit_balance",
-            "Balance",
-            default=0.0,
-        ) or 0.0
+        available = (
+            _find_number(
+                raw,
+                "balance",
+                "available",
+                "remaining",
+                "creditbalance",
+                exclude=("models",),
+            )
+            or 0.0
+        )
 
     renews_at = (
         raw.get("renews_at")
@@ -231,6 +301,9 @@ def normalize_account(data: dict) -> dict:
         or raw.get("next_billing_at")
         or raw.get("period_end")
         or raw.get("RenewsAt")
+        or _find_string(
+            raw, "renewsat", "resetsat", "nextbillingat", "periodend"
+        )
     )
 
     return {
@@ -241,6 +314,8 @@ def normalize_account(data: dict) -> dict:
         "included": included,
         "extra": extra,
         "used": used,
+        "requests": requests_count,
+        "models_used": models_used,
         "renews_at": str(renews_at) if renews_at else None,
         "raw": raw,
     }
@@ -378,13 +453,46 @@ def balance_text(acc: dict) -> str:
     )
     if has_money:
         lines.append("")
-        lines.append(f"Остаток: <b>${acc['balance']:.2f}</b>")
-        if acc.get("included") is not None:
-            lines.append(f"Включено в план: ${acc['included']:.2f}/мес")
-        if acc.get("extra") is not None:
-            lines.append(f"Extra usage: ${acc['extra']:.2f}")
-        if acc.get("used") is not None:
-            lines.append(f"Использовано в месяце: ${acc['used']:.2f}")
+        if (
+            acc.get("included") is not None
+            and acc.get("used") is not None
+        ):
+            # Формат как на https://ollama.com/settings: «$2.01 of $60 used»
+            pct = (
+                f" ({acc['used'] / acc['included'] * 100:.0f}%)"
+                if acc["included"] > 0
+                else ""
+            )
+            lines.append(
+                f"Месяц: <b>${acc['used']:.2f} из "
+                f"${acc['included']:.2f}</b> использовано{pct}"
+            )
+            lines.append(f"Остаток: <b>${acc['balance']:.2f}</b>")
+        else:
+            lines.append(f"Остаток: <b>${acc['balance']:.2f}</b>")
+            if acc.get("included") is not None:
+                lines.append(f"Включено в план: ${acc['included']:.2f}/мес")
+            if acc.get("extra") is not None:
+                lines.append(f"Extra usage: ${acc['extra']:.2f}")
+            if acc.get("used") is not None:
+                lines.append(f"Использовано в месяце: ${acc['used']:.2f}")
+        if acc.get("requests") is not None:
+            models_used = acc.get("models_used") or {}
+            if models_used:
+                top = sorted(models_used.items(), key=lambda kv: -kv[1])
+                shown = "\n".join(
+                    f"  • <code>{escape(m)}</code> — {n}"
+                    for m, n in top[:10]
+                )
+                extra_n = len(top) - 10
+                if extra_n > 0:
+                    shown += f"\n  …и ещё {extra_n} моделей"
+                lines.append(
+                    f"Запросов за месяц: <b>{acc['requests']}</b>\n"
+                    f"{shown}"
+                )
+            else:
+                lines.append(f"Запросов за месяц: <b>{acc['requests']}</b>")
     else:
         lines.append("")
         lines.append(

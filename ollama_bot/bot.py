@@ -252,45 +252,30 @@ def fetch_usage() -> dict:
 
 
 def normalize_usage(usage: dict, plan: str) -> dict:
-    """Разбор ответа /api/usage → used/included/requests/models_used."""
-    limits = usage.get("limits") or {}
-    monthly = limits.get("monthly") or {}
-
-    fraction = monthly.get("usage")
+    """Разбор ответа /api/usage → used/included/requests/models_used.
+    
+    Новый формат API (с ~октября 2026):
+    {"totals": {"request_count": 265, "usage_usd": 1.31773, ...},
+     "buckets": [...]}
+    
+    usage_usd — фактический расход в USD.
+    """
+    totals = usage.get("totals") or {}
+    
+    # Новый формат: usage_usd напрямую в долларах
+    used = totals.get("usage_usd")
+    if used is not None:
+        used = round(float(used), 2)
+    
     included = PRICING_INCLUDED.get(str(plan).lower())
     
-    log.info("=== DEBUG normalize_usage ===")
-    log.info("monthly: %s", json.dumps(monthly, default=str)[:300])
-    log.info("fraction: %s, included: %s, plan: %s", fraction, included, plan)
+    requests_count = totals.get("request_count")
+    if requests_count is not None:
+        requests_count = int(requests_count)
     
-    used = (
-        round(float(fraction) * included, 2)
-        if fraction is not None and included
-        else None
-    )
-    
-    log.info("calculated used: %s", used)
-
-    requests_count = None
+    # Buckets могут содержать данные по моделям, но в новом формате
+    # models_info структура отличается, пропускаем для теперь
     models_used = {}
-    for m in monthly.get("models") or []:
-        if isinstance(m, dict):
-            name = m.get("name")
-            cnt = m.get("request_count")
-            if name and cnt is not None:
-                models_used[str(name)] = int(cnt)
-    if models_used:
-        requests_count = sum(models_used.values())
-    else:
-        rc = monthly.get("request_count")
-        if rc is not None:
-            requests_count = int(rc)
-
-    # Резервные имена полей (на случай смены формата API)
-    if included is None:
-        included = _find_number(monthly, "included", "monthlycredits")
-    if used is None:
-        used = _find_number(monthly, "used", "totalusage", exclude=("models",))
 
     return {
         "included": included,
@@ -304,7 +289,7 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
     """Приводит ответы /api/me + /api/usage к внутренней структуре.
 
     /api/me отдаёт профиль (ID, Email, Name, Plan, …), /api/usage —
-    monthly usage (доля использованного пула + модели с числом запросов).
+    monthly usage (фактический расход в USD).
 
     Возвращает dict с полями:
       - balance: float — доступный остаток (0.0, если API не отдаёт)
@@ -318,14 +303,8 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
       - models_used: dict — {модель: запросов} за месяц
       - renews_at: str | None — дата/текст следующего обновления пула
       - raw: dict — полный ответ /api/me
-      - raw_usage: dict — полный ответ /api/usage (для отладки)
     """
     raw = data if isinstance(data, dict) else {}
-
-    # DEBUG: логируем raw-ответы
-    log.info("=== DEBUG normalize_account ===")
-    log.info("raw from /api/me: %s", json.dumps(raw, default=str)[:500])
-    log.info("raw usage from /api/usage: %s", json.dumps(usage, default=str)[:500] if usage else "None")
 
     plan = (
         raw.get("Plan")

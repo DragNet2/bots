@@ -258,11 +258,18 @@ def normalize_usage(usage: dict, plan: str) -> dict:
 
     fraction = monthly.get("usage")
     included = PRICING_INCLUDED.get(str(plan).lower())
+    
+    log.info("=== DEBUG normalize_usage ===")
+    log.info("monthly: %s", json.dumps(monthly, default=str)[:300])
+    log.info("fraction: %s, included: %s, plan: %s", fraction, included, plan)
+    
     used = (
         round(float(fraction) * included, 2)
         if fraction is not None and included
         else None
     )
+    
+    log.info("calculated used: %s", used)
 
     requests_count = None
     models_used = {}
@@ -311,8 +318,14 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
       - models_used: dict — {модель: запросов} за месяц
       - renews_at: str | None — дата/текст следующего обновления пула
       - raw: dict — полный ответ /api/me
+      - raw_usage: dict — полный ответ /api/usage (для отладки)
     """
     raw = data if isinstance(data, dict) else {}
+
+    # DEBUG: логируем raw-ответы
+    log.info("=== DEBUG normalize_account ===")
+    log.info("raw from /api/me: %s", json.dumps(raw, default=str)[:500])
+    log.info("raw usage from /api/usage: %s", json.dumps(usage, default=str)[:500] if usage else "None")
 
     plan = (
         raw.get("Plan")

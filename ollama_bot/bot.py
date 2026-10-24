@@ -164,16 +164,53 @@ def fetch_account() -> dict:
 def fetch_account_full() -> tuple:
     """Профиль (/api/me) + monthly usage (/api/usage) одним вызовом.
 
-    Usage не критичен: при его недоступности возвращаем (me, None) —
-    бот покажет баланс без строки «использовано».
+    Usage и balance не критичны: при их недоступности возвращаем
+    (me, None, None) — бот покажет данные из остальных источников.
     """
     data = fetch_account()
+    usage = None
+    balance = None
     try:
         usage = fetch_usage()
     except Exception as e:
         log.warning("usage error: %s", e)
-        usage = None
-    return data, usage
+    try:
+        balance = fetch_balance()
+    except Exception as e:
+        log.warning("balance error: %s", e)
+    return data, usage, balance
+
+
+def fetch_balance() -> dict:
+    """Баланс и период подписки (GET /api/balance).
+
+    Реальный ответ для Pro-плана:
+    {"included": {"balance_usd": 26.12, "allowance_usd": 60,
+                  "period": {"from": "2026-10-14T16:10:22Z",
+                             "until": "2026-11-14T16:10:22Z"}},
+     "purchased": {"balance_usd": 0}}
+
+    period.until — дата истечения включённого пула (== истечение подписки),
+    allowance_usd — размер пула, balance_usd — остаток. Для free-плана
+    (и при ошибке) не критичен: caller обрабатывает и пустой ответ.
+    """
+    r = requests.get(
+        f"{API_BASE}/balance",
+        headers={**_auth(), "Accept": "application/json"},
+        timeout=30,
+    )
+    if r.status_code in (401, 403):
+        raise AccountUnavailable(
+            "ключ отклонён /api/balance — проверьте OLLAMA_API_KEY "
+            "на https://ollama.com/settings/keys"
+        )
+    if r.status_code in (404, 405):
+        raise AccountUnavailable(
+            f"эндпоинт /api/balance недоступен ({r.status_code}) — "
+            "Ollama изменила API; обновите бота"
+        )
+    r.raise_for_status()
+    return r.json()
 
 
 def _walk(obj, path=()):
@@ -272,6 +309,13 @@ def _plural_ru(n: int, one: str, few: str, many: str) -> str:
     return many
 
 
+def _num(v) -> float | None:
+    """Безопасное приведение скаляра к float (None для не-чисел)."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    return None
+
+
 def _find_models_usage(raw) -> dict:
     """Расход по моделям: {"model": N} из секции ...Models.* ответа."""
     out = {}
@@ -296,6 +340,7 @@ def fetch_usage() -> dict:
     """
     r = requests.get(
         f"{API_BASE}/usage",
+        params={"range": "30d"},
         headers={**_auth(), "Accept": "application/json"},
         timeout=30,
     )
@@ -315,26 +360,27 @@ def fetch_usage() -> dict:
 
 def normalize_usage(usage: dict, plan: str) -> dict:
     """Разбор ответа /api/usage → used/included/requests/models_used.
-    
+
     Новый формат API (с ~октября 2026):
-    {"totals": {"request_count": 265, "usage_usd": 1.31773, ...},
+    {"range": "7d", "totals": {"request_count": 265, "usage_usd": 1.31773, ...},
      "buckets": [...]}
-    
-    usage_usd — фактический расход в USD.
+
+    usage_usd — фактический расход в USD за запрошенный range (по умолчанию
+    API отдаёт 7d; для «месяца» нужен range=30d — берём в fetch_usage).
     """
     totals = usage.get("totals") or {}
-    
+
     # Новый формат: usage_usd напрямую в долларах
     used = totals.get("usage_usd")
     if used is not None:
         used = round(float(used), 2)
-    
+
     included = PRICING_INCLUDED.get(str(plan).lower())
-    
+
     requests_count = totals.get("request_count")
     if requests_count is not None:
         requests_count = int(requests_count)
-    
+
     # Buckets могут содержать данные по моделям, но в новом формате
     # models_info структура отличается, пропускаем для теперь
     models_used = {}
@@ -347,11 +393,14 @@ def normalize_usage(usage: dict, plan: str) -> dict:
     }
 
 
-def normalize_account(data: dict, usage: dict | None = None) -> dict:
-    """Приводит ответы /api/me + /api/usage к внутренней структуре.
+def normalize_account(
+    data: dict, usage: dict | None = None, balance: dict | None = None
+) -> dict:
+    """Приводит ответы /api/me + /api/usage + /api/balance к структуре бота.
 
     /api/me отдаёт профиль (ID, Email, Name, Plan, …), /api/usage —
-    monthly usage (фактический расход в USD).
+    monthly usage (фактический расход в USD), /api/balance — остаток
+    включённого пула и его период (period.until = истечение подписки).
 
     Возвращает dict с полями:
       - balance: float — доступный остаток (0.0, если API не отдаёт)
@@ -378,6 +427,28 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
         or raw.get("subscription_plan")
         or "?"
     )
+
+    # /api/balance — приоритетный источник: точные остаток/пул + период.
+    bal_included = bal_extra = bal_remaining = None
+    expires_at = None
+    if isinstance(balance, dict):
+        inc = balance.get("included") or {}
+        pur = balance.get("purchased") or {}
+        bal_included = (
+            _num(inc.get("allowance_usd"))
+            if inc.get("allowance_usd") is not None
+            else None
+        )
+        bal_remaining = (
+            _num(inc.get("balance_usd"))
+            if inc.get("balance_usd") is not None
+            else None
+        )
+        purchased = _num(pur.get("balance_usd"))
+        bal_extra = purchased if purchased else None
+        period = inc.get("period") if isinstance(inc, dict) else None
+        if isinstance(period, dict) and period.get("until"):
+            expires_at = str(period["until"])
 
     if usage:
         u = normalize_usage(usage, str(plan))
@@ -435,6 +506,15 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
     ):
         included, used = used, included
 
+    # Данные из /api/balance точнее (реальный остаток пула), перекрываем
+    # вычисленные из usage значения.
+    if bal_included is not None:
+        included = bal_included
+    if bal_extra is not None:
+        extra = bal_extra
+    if bal_remaining is not None:
+        used = max((included or 0.0) - bal_remaining, 0.0)
+
     parts = [v for v in (included, extra) if v is not None]
     if parts:
         available = sum(parts) - (used or 0.0)
@@ -452,7 +532,8 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
         )
 
     renews_at = (
-        raw.get("renews_at")
+        expires_at
+        or raw.get("renews_at")
         or raw.get("resets_at")
         or raw.get("next_billing_at")
         or raw.get("period_end")
@@ -501,7 +582,7 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
                         break
 
     return {
-        "balance": max(float(available), 0.0),
+        "balance": round(max(float(available), 0.0), 2),
         "plan": str(plan),
         "email": raw.get("Email") or raw.get("email"),
         "name": raw.get("Name") or raw.get("name"),
@@ -661,6 +742,8 @@ def balance_text(acc: dict) -> str:
                 f"Месяц: <b>${acc['used']:.2f} из "
                 f"${acc['included']:.2f}</b> использовано{pct}"
             )
+            if acc.get("extra") is not None:
+                lines.append(f"Extra usage: <b>${acc['extra']:.2f}</b>")
             lines.append(f"Остаток: <b>${acc['balance']:.2f}</b>")
         else:
             lines.append(f"Остаток: <b>${acc['balance']:.2f}</b>")
@@ -809,8 +892,8 @@ async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ Запрашиваю баланс...")
     try:
-        data, usage = await asyncio.to_thread(fetch_account_full)
-        acc = normalize_account(data, usage)
+        data, usage, balance = await asyncio.to_thread(fetch_account_full)
+        acc = normalize_account(data, usage, balance)
         state = load_state()
         update_snapshots(state, acc["balance"])
         state["last_balance"] = acc["balance"]
@@ -829,8 +912,8 @@ async def show_spending(update: Update, context: ContextTypes.DEFAULT_TYPE, peri
         return
     msg = await update.message.reply_text("⏳ Считаю расход...")
     try:
-        data, usage = await asyncio.to_thread(fetch_account_full)
-        acc = normalize_account(data, usage)
+        data, usage, balance = await asyncio.to_thread(fetch_account_full)
+        acc = normalize_account(data, usage, balance)
         if str(acc.get("plan", "")).lower() == "free":
             await msg.edit_text(
                 "ℹ️ План <b>free</b> — API Ollama не отдаёт баланс/расход, "
@@ -919,8 +1002,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_balance_job(context: ContextTypes.DEFAULT_TYPE):
     try:
-        data, usage = await asyncio.to_thread(fetch_account_full)
-        acc = normalize_account(data, usage)
+        data, usage, balance = await asyncio.to_thread(fetch_account_full)
+        acc = normalize_account(data, usage, balance)
     except Exception as e:
         log.warning("Проверка баланса не удалась: %s", e)
         return

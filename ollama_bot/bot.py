@@ -24,7 +24,7 @@ import logging
 import os
 import re
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape
 from zoneinfo import ZoneInfo
 
@@ -203,11 +203,73 @@ def _find_number(raw, *names, exclude=()):
     return None
 
 
-def _find_string(raw, *names):
+def _find_date(raw, *names):
+    """Дата по имени ключа: ISO-строка или unix-секунды/миллисекунды.
+
+    Текстовые значения (например «in 12 days») пропускаются — их выводить
+    нельзя: фраза описывает не дату, а относительный срок.
+    Возвращает нормализованную ISO-строку либо None, если совпадений,
+    похожих на дату, нет.
+    """
     for path, v in _walk(raw):
-        if isinstance(v, str) and _norm(path[-1]) in names:
-            return v
+        if not path or _norm(path[-1]) not in names:
+            continue
+        if isinstance(v, str):
+            t = v.strip()
+            if re.search(r"\d{4}-\d{2}-\d{2}", t):
+                return t
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            n = float(v)
+            if 1e9 <= n < 1e11:  # unix-секунды (2001—5138)
+                return datetime.fromtimestamp(n, tz=TZ).isoformat()
+            if 1e12 <= n < 1e14:  # unix-миллисекунды
+                return datetime.fromtimestamp(n / 1000, tz=TZ).isoformat()
     return None
+
+
+def _fmt_date(value: str | None) -> str | None:
+    """ISO-дата → «04.11.2026 01:00 МСК» (при 00:00 — только дата).
+
+    Нераспознаваемые строки возвращаются как есть
+    (API может отдавать и текст, например «in 12 days»).
+    """
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return s
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=TZ)
+    d = d.astimezone(TZ)
+    day = f"{d.day:02d}.{d.month:02d}.{d.year}"
+    return day if (d.hour == 0 and d.minute == 0) else f"{day} {d:%H:%M} МСК"
+
+
+def _days_left(value: str | None) -> int | None:
+    """Полных дней до даты (None — дата не распознана)."""
+    if not value:
+        return None
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=TZ)
+    # +1 секунда сглаживает микросекунды в ответе API: дата чуть в будущем
+    # с fraction не превращается в «-1 день» из-за округления timedelta
+    return (d + timedelta(seconds=1) - datetime.now(TZ)).days
+
+
+def _plural_ru(n: int, one: str, few: str, many: str) -> str:
+    if abs(n) % 10 == 1 and abs(n) % 100 != 11:
+        return one
+    if 2 <= abs(n) % 10 <= 4 and not 12 <= abs(n) % 100 <= 14:
+        return few
+    return many
 
 
 def _find_models_usage(raw) -> dict:
@@ -301,7 +363,9 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
       - used: float | None — использовано в текущем месяце ($)
       - requests: int | None — запросов за текущий месяц
       - models_used: dict — {модель: запросов} за месяц
-      - renews_at: str | None — дата/текст следующего обновления пула
+      - renews_at: str | None — дата истечения подписки / обновления пула
+        (ISO-строка, unix-секунды/миллисекунды или вложенный объект
+        subscription/billing/plan)
       - raw: dict — полный ответ /api/me
     """
     raw = data if isinstance(data, dict) else {}
@@ -393,10 +457,48 @@ def normalize_account(data: dict, usage: dict | None = None) -> dict:
         or raw.get("next_billing_at")
         or raw.get("period_end")
         or raw.get("RenewsAt")
-        or _find_string(
-            raw, "renewsat", "resetsat", "nextbillingat", "periodend"
+        or _find_date(
+            raw,
+            "renewsat",
+            "renewson",
+            "renewdate",
+            "renewaldate",
+            "nextbillingat",
+            "nextbillingdate",
+            "nextbillingon",
+            "billingcycleend",
+            "periodend",
+            "periodendat",
+            "currentperiodend",
+            "subscriptionend",
+            "subscriptionexpiresat",
+            "subscriptionexpires",
+            "expiresat",
+            "expireat",
+            "expirydate",
+            "expireson",
+            "validuntil",
+            "validtill",
         )
     )
+    # Fallback: вложенный объект, например {"subscription": {"expires_at": ...}}
+    if not renews_at:
+        for path, v in _walk(raw):
+            if len(path) >= 2 and isinstance(v, str):
+                if _norm(path[-2]) in ("subscription", "billing", "plan"):
+                    if _norm(path[-1]) in (
+                        "endsat",
+                        "endat",
+                        "enddate",
+                        "expiredate",
+                        "expires",
+                        "expiry",
+                        "until",
+                        "through",
+                        "renewsat",
+                    ):
+                        renews_at = v
+                        break
 
     return {
         "balance": max(float(available), 0.0),
@@ -594,7 +696,21 @@ def balance_text(acc: dict) -> str:
         )
 
     if acc.get("renews_at"):
-        lines.append(f"Обновление: {escape(acc['renews_at'])}")
+        nice = _fmt_date(acc["renews_at"])
+        if nice:
+            line = f"📅 Подписка истекает: <b>{escape(nice)}</b>"
+            dl = _days_left(acc["renews_at"])
+            if dl is not None:
+                if dl > 0:
+                    line += (
+                        f" (через {dl} "
+                        f"{_plural_ru(dl, 'день', 'дня', 'дней')})"
+                    )
+                elif dl == 0:
+                    line += " (сегодня)"
+                else:
+                    line += " ⚠️ (истекла)"
+            lines.append(line)
     lines.append("\nПополнить: https://ollama.com/settings/billing")
     return "\n".join(lines)
 
@@ -679,7 +795,7 @@ def authorized(update: Update) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 <b>Ollama Cloud монитор</b>\n\n"
-        "💰 Баланс — план и остаток (если API отдаёт)\n"
+        "💰 Баланс — план, остаток и дата истечения подписки\n"
         "📅 Сегодня / 🗓 Месяц — расход за период\n"
         "🤖 Модели — список доступных моделей\n"
         "⚠️ Уведомления при остатке ниже $5 / $2 / $1 (для платных планов)",

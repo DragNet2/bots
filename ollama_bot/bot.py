@@ -779,6 +779,7 @@ def balance_text(acc: dict) -> str:
         )
 
     if acc.get("renews_at"):
+        lines.append("")
         nice = _fmt_date(acc["renews_at"])
         if nice:
             line = f"📅 Подписка истекает: <b>{escape(nice)}</b>"
